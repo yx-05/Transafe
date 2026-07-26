@@ -98,6 +98,10 @@ class GraphState(TypedDict):
     # ── Streaming ──
     status_messages: list[str]           # appended by each node for WS streaming
 
+    # ── Case Correlation ──
+    associated_case_id: Optional[str]    # explicitly linked case from frontend
+    associated_case_context: Optional[dict] # fetched context (transcripts, phishing text, entities)
+
     # ── Metadata ──
     created_at: str                      # ISO 8601 timestamp
     user_id: str
@@ -178,6 +182,19 @@ def orchestrator_node(state: GraphState) -> GraphState:
     trigger = state["trigger_type"]
     workers = TRIGGER_WORKER_MAP[trigger]
 
+    # Load associated case context if provided by client (confirmed/selected by user)
+    associated_id = state["trigger_payload"].get("associated_case_id")
+    if associated_id:
+        state["associated_case_id"] = associated_id
+        # Query database to fetch transcripts, phishing text, and entities for the case
+        state["associated_case_context"] = supabase.fetch_case_context(associated_id)
+        state["status_messages"].append(
+            f"Orchestrator: linked active case {associated_id} context"
+        )
+    else:
+        state["associated_case_id"] = None
+        state["associated_case_context"] = None
+
     state["workers_to_activate"] = workers
     state["status_messages"].append(
         f"Orchestrator: routing {trigger} trigger to {workers}"
@@ -225,38 +242,63 @@ For all other triggers (TRANSACTION, CALL), the Orchestrator uses LangGraph's `S
 
 **Responsibility**: Analyse the user's recent behavioural telemetry signals to detect anomalies that may indicate coercion, remote access, or unusual activity patterns.
 
+**Tools & Skills**:
+* **`fetch_telemetry_events(user_id: str, session_id: str) -> list[dict]`**: Query Supabase `telemetry.telemetry_events` for the last 100 events in the past hour for the specified session. Returns a list of events containing `event_type`, `event_value`, `device_id`, and `created_at`.
+
 **Input data queried**:
 ```sql
 SELECT event_type, event_value, device_id, created_at
 FROM telemetry.telemetry_events
 WHERE user_id = :user_id
+  AND session_id = :session_id
   AND created_at > NOW() - INTERVAL '1 hour'
 ORDER BY created_at DESC
 LIMIT 100;
 ```
 
 **Signals analysed**:
-- Typing speed variance (unusually fast = scripted, unusually slow = coercion)
-- App screen navigation sequence (abnormal flows)
-- Device ID changes within session
-- Session duration anomalies
-- Background app / screen share detection flags
+- Typing speed variance (unusually fast = script/bot inputs, unusually slow/jittery = coercion or manual dictation)
+- App screen navigation sequence (abnormal jumps or bypasses of regular onboarding flow)
+- Device ID mismatch within the same transaction session
+- Copy-paste actions on recipient accounts or amounts (suggests user copying details from a chat screen controlled by a scammer)
+- Active screen sharing / remote access active flags (e.g. `SCREEN_SHARE_DETECTED`)
 
-**Prompt template** (summarised):
+**Full LLM System Prompt**:
 ```
-You are a behavioural fraud analyst. Analyse the following telemetry events
-from a mobile banking session and identify any anomalous patterns that could
-indicate the user is being coerced, using a compromised device, or acting
-under unusual circumstances.
+You are an expert fraud behavioral biometrics analyst at a retail bank.
+Your job is to analyze the sequence of telemetry events and behavioral biometrics from a user's session and output a risk assessment.
+Look for the following signals:
+1. Hesitation or Dictation: Typing cadence that is extremely slow (avg flight time > 500ms) or contains high backspace counts, indicating the user is typing under coercion/dictation.
+2. Automation/Bots: Flight times near 0ms or highly constant typing speed, indicating automated inputs.
+3. Instruction Following: Copy-pasting account numbers or names, erratic mouse cursor movements, and frequent tab switches (indicating user is copying details from WhatsApp/Telegram).
+4. Direct Compromise: Orientations changing rapidly, screenshots taken, or active screen sharing flags indicating a remote scammer.
 
-Telemetry events (last 60 minutes):
+You must respond in strict JSON format with keys "score" (0-100), "confidence" (0.0-1.0), and "evidence" (list of strings).
+```
+
+**Full LLM Human Prompt Template**:
+```
+Analyze the following telemetry and behavioral biometric data:
+User ID: {user_id}
+Session ID: {session_id}
+Device ID: {device_id}
+
+Telemetry Sequence (Newest First):
 {telemetry_json}
 
-Respond in JSON:
+Provide your risk assessment. If the data is clean (e.g. normal flight times, known device, normal flow), score it below 20. If anomalous, increase score and explain why in evidence.
+```
+
+**Output example**:
+```json
 {
-  "score": 0-100,
-  "confidence": 0.0-1.0,
-  "evidence": ["bullet 1", "bullet 2", ...]
+  "score": 15,
+  "confidence": 0.82,
+  "evidence": [
+    "Device fingerprint matches known registered device",
+    "Typing cadence within normal range (avg 320ms between keystrokes)",
+    "No screen sharing flag detected"
+  ]
 }
 ```
 
@@ -282,12 +324,18 @@ Respond in JSON:
 |-----------|-------|
 | **Node name** | `research_worker` |
 | **LLM model** | `llama-3.3-70b-versatile` |
-| **Primary data source** | Supabase pgvector `public.fraud_memory` |
+| **Primary data source** | Supabase pgvector `public.fraud_memory`, `state.associated_case_context` |
 | **Secondary data source** | Tavily web search (conditional — low-confidence fallback) |
 | **Activation triggers** | TRANSACTION, CALL, PHISHING (stage 2), REPORT |
 | **Output field** | `state.research_finding` |
 
 **Responsibility**: Perform background investigation on suspicious entities (phone numbers, bank account numbers, URLs) by querying the internal fraud knowledge base via RAG. When confidence is low, fall back to Tavily web search to check if the entity is publicly reported as a scam. In REPORT mode, ingest new fraud data into pgvector.
+
+**Tools & Skills**:
+* **`check_blacklist(phone: str = None, url: str = None) -> list[dict]`**: Search the `public.fraud_memory` database using pgvector cosine similarity at a high matching threshold (≥ 0.80).
+* **`search_fraud_memory(query: str, threshold: float = 0.75, top_k: int = 5) -> list[dict]`**: Perform a semantic search on the `public.fraud_memory` table using a text query, mapping text to a 768-dimensional embedding. Returns matching cases with details on fraud type, phone numbers, bank accounts, and similarity scores.
+* **`tavily_search(entities: list[str]) -> list[dict]`**: Query the Tavily Search API targeting Malaysian forums and official blacklist domains (e.g. `semak.my`, `rmp.gov.my`, `bnm.gov.my`, `lowyat.net`) to find public fraud complaints.
+* **`add_fraud_memory(case_id: str, fraud_type: str, content: str, metadata: dict) -> dict`**: Insert a new record into `public.fraud_memory` with an automatically generated Groq text embedding.
 
 **QUERY mode** (TRANSACTION, CALL):
 ```python
@@ -296,6 +344,13 @@ from src.db.vector_store import search_fraud_memory, check_blacklist
 # Extract entities from trigger payload
 entities = extract_entities(state["trigger_payload"])
 # e.g. ["01X-XXXXXXX", "1234-5678-9012-3456", "http://scam.example.com"]
+
+# Enrich search query with any entities from user-associated case context (confirmed link)
+case_context = state.get("associated_case_context")
+if case_context:
+    entities.extend(case_context.get("phone_numbers", []))
+    entities.extend(case_context.get("bank_accounts", []))
+    entities.extend(case_context.get("urls", []))
 
 # RAG query against Supabase pgvector
 results = search_fraud_memory(
@@ -377,6 +432,52 @@ add_fraud_memory(
 )
 ```
 
+**Full LLM System Prompt (QUERY mode)**:
+```
+You are an expert financial fraud research intelligence agent.
+Analyze the query entities (phone numbers, bank accounts, URLs) alongside the RAG search results from our internal fraud database and public web reports.
+Your job is to determine:
+1. If any of the query entities appear directly in the historical scam logs (high similarity matches > 0.80).
+2. If there are close semantic matches describing similar fraud patterns involving these entities.
+3. If public web reports (Tavily search) indicate these accounts or numbers are linked to online scams, police reports, or central bank warning lists in Malaysia.
+
+Return your findings in strict JSON format:
+{
+  "score": integer (0-100, where 0 is clean/no matches and 100 is a confirmed match in active scam cases),
+  "confidence": float (0.0-1.0),
+  "evidence": ["bullet point 1", "bullet point 2"]
+}
+```
+
+**Full LLM Human Prompt Template (QUERY mode)**:
+```
+Query Entities: {entities_list}
+
+Internal pgvector Matches:
+{internal_matches_json}
+
+Tavily Web Search Results:
+{tavily_results_json}
+
+Analyze the match details and output your structured fraud intelligence risk finding.
+```
+
+**Fraud Report Summarization Prompt (`summarise_prompt`)**:
+```
+You are a fraud investigator. Summarize the following user-submitted fraud report into a concise, detailed narrative of exactly how the scam transpired. Focus on the scam method, the payment instructions, the platform used, and the scammer's behavior. Exclude personal victim details.
+
+User Report:
+"{description}"
+```
+
+**Entity Extraction Prompt (`extract_entities_prompt`)**:
+```
+You are a structured data extractor. Given the following user report, extract any entities. Output in JSON format with keys "fraud_type" (macau_scam, investment_scam, impersonation_scam, love_scam, phishing, parcel_scam, other), "phones" (list of strings), "accounts" (list of strings), "urls" (list of strings), and "amount_lost_myr" (float).
+
+User Report:
+"{description}"
+```
+
 **Output example (QUERY mode)**:
 ```json
 {
@@ -414,12 +515,15 @@ add_fraud_memory(
 |-----------|-------|
 | **Node name** | `financial_worker` |
 | **LLM model** | `llama-3.3-70b-versatile` |
-| **Primary data source** | Supabase `public.transactions`, `public.accounts` |
+| **Primary data source** | Supabase `public.transactions`, `public.accounts`, `state.associated_case_context` |
 | **Secondary data source** | None |
 | **Activation triggers** | TRANSACTION |
 | **Output field** | `state.financial_finding` |
 
 **Responsibility**: Analyse the current transaction against the user's historical transaction patterns to identify statistical anomalies in amount, timing, recipient, and frequency.
+
+**Tools & Skills**:
+* **`fetch_user_transaction_history(sender_account: str) -> dict`**: Query Supabase `public.transactions` for transaction history in the past 90 days. Aggregates data to calculate average amount, max amount, total transaction count, and compile a list of known recipient account numbers.
 
 **Input data queried**:
 ```sql
@@ -439,12 +543,49 @@ WHERE sender_account = :sender_account
 GROUP BY hour_bucket;
 ```
 
+**Context cross-checked**:
+* Evaluates `associated_case_context` (if set) to check if the `recipient_account` appears in transcripts of active calls or text/OCR of submitted phishing screenshots. A match triggers an immediate high risk score override.
+
 **Signals analysed**:
 - Amount deviation from 90-day average (> 5x = high risk flag)
 - First-time recipient account
 - Unusual transaction hour (outside user's normal window)
 - Round number amounts (common in scam-instructed transfers)
 - Rapid succession of transfers (multiple transactions in < 10 minutes)
+
+**Full LLM System Prompt**:
+```
+You are an expert financial fraud audit agent specialized in transactional behavior anomaly detection.
+Your task is to analyze the details of a pending bank transfer against the customer's historical 90-day transaction patterns and any active, user-associated case context (which may include live call transcripts or phishing screenshot OCR text).
+
+Analyze the transaction for the following indicators:
+1. Deviations in Amount: Is the amount significantly higher than their typical average (e.g. > 5x avg amount)?
+2. First-Time Recipient: Has the sender ever transacted with this recipient account before?
+3. Unorthodox Timing: Is the transfer initiated at an unusual hour (e.g. between 12:00 AM and 5:00 AM) that deviates from historical peaks?
+4. Round-Number/Scam Cadence: Scammers often request round numbers (e.g. RM 5,000, RM 10,000) or push for a series of rapid transfers in under 10 minutes.
+5. Case Coercion Match: Check the `associated_case_context`. Does the recipient's account number, name, or bank match account details mentioned in the scam call transcripts or extracted from the phishing message? If so, this is a severe signal that the transaction is scammer-coerced (override score to 95+).
+
+Return your findings in strict JSON format:
+{
+  "score": integer (0-100),
+  "confidence": float (0.0-1.0),
+  "evidence": ["bullet point 1", "bullet point 2"]
+}
+```
+
+**Full LLM Human Prompt Template**:
+```
+Pending Transaction:
+{pending_transaction_json}
+
+Historical 90-Day Baseline:
+{historical_baseline_json}
+
+User-Associated Case Context (Call Transcripts & Phishing OCR):
+{associated_case_context_json}
+
+Perform your assessment and return the JSON findings.
+```
 
 **Output example**:
 ```json
@@ -495,7 +636,7 @@ Phone Worker Core
             ├── Conversation State Machine (LangGraph sub-graph)
             ├── LLM: decides next response based on caller answers
             ├── Anchor Question Scheduler (pre-set verification questions)
-            └── TTS Engine (free TTS API, Singapore/Malaysian English accent)
+            └── TTS Engine (Microsoft Edge Neural TTS via edge-tts, en-SG-LunaNeural / ms-MY-YasminNeural voices)
                     └── audio output → played to caller via mobile app
 
 Both modes:
@@ -575,6 +716,39 @@ The selected mode is sent to the backend via `POST /api/v1/trigger/call` with `c
 }
 ```
 
+**Full LLM System Prompt (Utterance Highlighter)**:
+```
+You are an expert scam call analyst. Analyze the transcribed utterance from a live call and output a risk highlights JSON object.
+Identify phrases indicating:
+1. false_accusation: Caller accusing the victim of crime (e.g. money laundering, tax evasion).
+2. coercion_threat: Threatening immediate arrest, police visits, or blacklisting.
+3. fund_transfer_request: Demanding transfer of money to a "safe account" or "audit account".
+4. credential_harvesting: Demanding passwords, OTPs, or credit card numbers.
+5. impersonation: Pretending to represent government bodies (PDRM, Bank Negara, Customs) or commercial banks.
+
+Respond in strict JSON format:
+{
+  "spans": [
+    {
+      "start": integer (character start index),
+      "end": integer (character end index),
+      "text": "the exact text span matching the risk",
+      "risk_level": "MEDIUM" | "HIGH",
+      "tag": "false_accusation" | "coercion_threat" | "fund_transfer_request" | "credential_harvesting" | "impersonation"
+    }
+  ],
+  "utterance_risk_score": integer (0-100)
+}
+```
+
+**Full LLM Human Prompt Template (Utterance Highlighter)**:
+```
+Transcribed Utterance:
+"{text}"
+
+Identify any scam indicators, calculate the risk score, and return the strict JSON spans.
+```
+
 **Scam Phrase Dictionary** (keyword fast-pass):
 ```python
 HIGH_RISK_PHRASES = [
@@ -590,6 +764,30 @@ HIGH_RISK_PHRASES = [
 ]
 ```
 
+**STT & TTS Core Tool Implementation Helpers**:
+```python
+async def transcribe_audio_chunk(audio_bytes: bytes) -> str:
+    """Send PCM mono 16kHz audio bytes to Groq Whisper API for transcription."""
+    response = groq_client.audio.transcriptions.create(
+        file=("chunk.wav", audio_bytes, "audio/wav"),
+        model="whisper-large-v3",
+        language="en", # or "ms" depending on call settings
+        response_format="json"
+    )
+    return response.text
+
+import edge_tts
+
+async def synthesize_text_to_audio(text: str, voice: str = "en-SG-LunaNeural") -> bytes:
+    """Generate audio bytes using edge-tts."""
+    communicate = edge_tts.Communicate(text, voice)
+    audio_data = b""
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_data += chunk["data"]
+    return audio_data
+```
+
 ---
 
 #### Mode 2: Auto-Talk Mode
@@ -601,11 +799,26 @@ HIGH_RISK_PHRASES = [
 3. Transcribed text → **Phone Worker Dialogue Controller** (LLM-based)
 4. Dialogue Controller decides next response using:
    - Conversation history so far
+   - Dynamic dialogue guide and anchor questions loaded from **external skill files**
    - Remaining unasked **Anchor Questions**
    - LLM reasoning about caller's intent
-5. LLM response text → **TTS API** (Singapore/Malaysian English accent) → audio played to caller
+5. LLM response text → **edge-tts API** (Singapore/Malaysian English or Malay neural accent) → audio played to caller
 6. Live highlight events still shown to user on app (same as Listen Mode)
 7. At call end, a `phone_finding` is assembled
+
+**Dynamic Skills Loading (Decoupled Approach):**
+
+To ensure dialogue rules, safety protocols, and anchor questions can be adjusted independently of Python code changes, the Dialogue Controller loads instructions dynamically from:
+* [phone_dialogue_guide.md](file:///D:/Github/transafe/backend/skills/phone_dialogue_guide.md)
+* [anchor_questions.md](file:///D:/Github/transafe/backend/skills/anchor_questions.md)
+
+These are parsed at session start and injected directly into the LLM system prompt context.
+
+**Strict Data Sandboxing & Privacy Guardrails:**
+
+To prevent social engineering attacks where scammers try to trick the AI into confirming sensitive banking details (like balances, account numbers, names, or IC numbers), the Phone Worker operates under a strict data sandbox:
+1. **No Data Access**: The Phone Worker is completely sandboxed from customer databases. The execution state `PhoneSessionState` contains zero personal user information.
+2. **Explicit LLM System Prompt Bans**: The LLM prompt enforces that the agent has no access to any details and must decline confirmation requests using a standardized template.
 
 **Dialogue Controller — Anchor Question Schedule:**
 
@@ -854,12 +1067,16 @@ If `initial_risk == "HIGH"`, the mobile app is immediately notified via WebSocke
 |-----------|-------|
 | **Node name** | `phishing_worker` |
 | **LLM model** | `llama-3.3-70b-versatile` |
-| **Primary data source** | Input payload (TEXT / URL / IMAGE with OCR) |
-| **Secondary data source** | Supabase pgvector `fraud_memory` |
+| **Primary data source** | Input payload (TEXT / URL / IMAGE with Groq Vision) |
+| **Secondary data source** | Supabase pgvector `public.fraud_memory` |
 | **Activation triggers** | PHISHING (Stage 1); CALL (async deep transcript analysis) |
 | **Output field** | `state.phishing_finding`, `state.extracted_entities` |
 
 **Responsibility**: Parse user-submitted suspicious content, extract structured entities, and identify phishing characteristics. This worker runs as **Stage 1** in the PHISHING two-stage pipeline — it extracts entities (`phone_numbers`, `urls`, `bank_accounts`) and writes them to `state["extracted_entities"]` so the Research Worker (Stage 2) can query the blacklist.
+
+**Tools & Skills**:
+* **`extract_text_from_image(base64_image: str) -> str`**: Decode a base64-encoded screenshot and query the Groq Vision model (`llama-3.2-11b-vision-preview`) to extract the raw text content without comments.
+* **`extract_entities_from_content(content: str) -> dict`**: Query `llama-3.3-70b-versatile` with structured output constraints to extract phone numbers, URLs, and bank accounts from raw text content.
 
 #### Input Types Supported
 
@@ -874,41 +1091,54 @@ class PhishingPayload(TypedDict):
 |----------------|-----------------|------------|
 | `TEXT` | Raw SMS / email / chat message text | Direct LLM analysis |
 | `URL` | Suspicious URL string | URL metadata analysis + LLM assessment |
-| `IMAGE` | Base64-encoded screenshot (JPG/PNG) | **OCR first** → extracted text → LLM analysis |
+| `IMAGE` | Base64-encoded screenshot (JPG/PNG) | **Groq Vision text extraction first** → extracted text → LLM analysis |
 
-#### IMAGE Processing — OCR Pipeline
+#### IMAGE Processing — Groq Vision OCR
 
-When `content_type == "IMAGE"`, the worker first runs OCR to extract text from the screenshot before passing to the LLM:
+When `content_type == "IMAGE"`, the worker calls Groq's vision model (`llama-3.2-11b-vision-preview`) to extract the text from the screenshot before passing it to the main analysis step:
 
 ```python
-import pytesseract
-import base64
-from PIL import Image
-import io
-
-def ocr_image(base64_image: str) -> str:
+def extract_text_from_image(base64_image: str) -> str:
     """
-    Decode base64 image and extract text via Tesseract OCR.
-    Returns extracted text string.
+    Extract text from a base64-encoded screenshot using Groq's Vision model.
     """
-    image_bytes = base64.b64decode(base64_image)
-    image = Image.open(io.BytesIO(image_bytes))
-
-    # Run OCR — supports English + Malay
-    ocr_text = pytesseract.image_to_string(image, lang="eng+msa")
-    return ocr_text.strip()
+    response = groq_client.chat.completions.create(
+        model="llama-3.2-11b-vision-preview",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Extract all text content from this screenshot of a message. "
+                            "Do not include any explanation, markdown formatting, or formatting tags. "
+                            "Just return the exact text you find in the image."
+                        )
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}"
+                        }
+                    }
+                ]
+            }
+        ],
+        temperature=0.0
+    )
+    return response.choices[0].message.content.strip()
 
 # In the worker:
 if payload["content_type"] == "IMAGE":
-    ocr_text = ocr_image(payload["content"])
-    analysis_content = f"[Extracted from screenshot via OCR]\n{ocr_text}"
+    extracted_text = extract_text_from_image(payload["content"])
+    analysis_content = f"[Extracted from screenshot via Groq Vision]\n{extracted_text}"
 else:
     analysis_content = payload["content"]
 ```
 
-> **OCR library**: `pytesseract` (Python wrapper for Tesseract OCR, free, open-source).
-> Language packs: `eng` (English) + `msa` (Malay) — handles both bilingual scam messages.
-> Dependency: `tesseract-ocr` system binary + `pytesseract`, `Pillow` Python packages.
+> **Vision Model**: `llama-3.2-11b-vision-preview` (via Groq API).
+> **Benefits**: Zero local binary/large package dependencies; high accuracy on bilingual (English/Malay) text.
 
 #### Analysis Approach (all content types)
 
@@ -936,6 +1166,34 @@ Step 3 — pgvector Pattern Matching
 
 Step 4 — Assemble phishing_finding + extracted_entities
     Write findings to state
+```
+
+**Full LLM System Prompt (Content Analysis)**:
+```
+You are an expert cybersecurity phishing analyst.
+Analyze the user-submitted content (which may be SMS text, email body, URL strings, or transcribed text from screenshots) and determine the risk of it being a phishing or scam attempt.
+
+Look for the following signals:
+1. Bank/Government Impersonation: Pretending to be Maybank, CIMB, Bank Negara, PDRM, LHDN, POS Malaysia, etc.
+2. Urgent/Threatening Language: Claiming account suspension, immediate blocks, packages held, or legal actions unless action is taken in hours.
+3. Call-to-Action Lookalikes: Providing links that mimic official bank domains (e.g. cimb-secure-login.net, maybank2u-verify.xyz) or asking the user to call suspicious mobile numbers.
+4. Information Harvester: Requesting login credentials, card numbers, PINs, or OTPs.
+
+Respond in strict JSON format:
+{
+  "score": integer (0-100),
+  "confidence": float (0.0-1.0),
+  "evidence": ["bullet point 1", "bullet point 2"]
+}
+```
+
+**Full LLM Human Prompt Template (Content Analysis)**:
+```
+Material Source: {source}
+Material Content:
+"{content}"
+
+Provide your structured risk finding.
 ```
 
 #### Entity Extraction — Prompt Template

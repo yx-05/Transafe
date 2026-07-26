@@ -240,6 +240,7 @@ Trigger risk assessment before a transaction is executed.
 {
   "user_id": "uuid-...",
   "session_id": "uuid-...",
+  "associated_case_id": "uuid-...", // optional, linked prior case ID (e.g. active call or phishing check)
   "transaction": {
     "transaction_id": "uuid-...",
     "sender_account": "1234-5678-9012-3456",
@@ -270,16 +271,14 @@ Trigger risk assessment before a transaction is executed.
 
 ### 4.3 POST /api/v1/trigger/call
 
-Trigger risk assessment for a call and start a Phone Worker session. Supports two deployment modes:
-
-- **WebRTC Mode** (Web App): Both parties join a browser-based WebRTC call. The backend taps the audio stream via a server-side audio WebSocket for real-time STT + scam analysis.
-- **Native Mode**: App intercepts an incoming PSTN/VoIP call and forwards call metadata + audio stream to the backend.
+Trigger risk assessment for a browser-based WebRTC call and start a Phone Worker session (Listen Mode or Auto-Talk Mode). Both parties connect via browser-native WebRTC, and audio is tapped via WebSocket (`/ws/call/{call_session_id}/audio`) for real-time STT + scam analysis.
 
 **Request**:
 ```json
 {
   "user_id": "uuid-...",
   "session_id": "uuid-...",
+  "associated_case_id": "uuid-...", // optional, links call to a prior phishing check
   "call": {
     "caller_number": "+60161234567",
     "caller_name": "Unknown",
@@ -296,7 +295,6 @@ Trigger risk assessment for a call and start a Phone Worker session. Supports tw
 | Value | Platform | Description |
 |-------|----------|-------------|
 | `WEBRTC` | Web App | Call is conducted inside the browser using WebRTC (PeerJS / LiveKit OSS). Backend receives audio via `/ws/call/{call_session_id}/audio` WebSocket. |
-| `NATIVE` | Native App | App intercepts PSTN/VoIP call via `CallKit` (iOS) or `TelecomManager` (Android) and pipes audio to backend. |
 
 **`call_mode` values**:
 | Value | Description |
@@ -360,6 +358,7 @@ Submit suspicious content for phishing analysis.
 {
   "user_id": "uuid-...",
   "session_id": "uuid-...",
+  "associated_case_id": "uuid-...", // optional, links analysis to an active call or case
   "material": {
     "content_type": "TEXT",
     "content": "URGENT: Your Maybank account has been compromised. Click http://maybank2u-verify.xyz to verify. Call 0161234567 immediately.",
@@ -373,7 +372,7 @@ Submit suspicious content for phishing analysis.
 |-------|----------------|-------------------|
 | `TEXT` | Raw SMS / email / chat message text | Direct LLM analysis |
 | `URL` | Single URL string | URL metadata analysis + LLM assessment |
-| `IMAGE` | Base64-encoded screenshot (JPG/PNG) | OCR via Tesseract → extracted text → LLM analysis |
+| `IMAGE` | Base64-encoded screenshot (JPG/PNG) | OCR via Groq Vision → extracted text → LLM analysis |
 
 > **IMAGE upload**: Encode the screenshot as base64 (`btoa()` on web, `Base64.encodeToString()` on Android/iOS) and pass the raw base64 string in `content`. Do not include a `data:image/...;base64,` prefix. Max image size: **4 MB** before base64 encoding.
 
@@ -401,6 +400,7 @@ Submit a fraud report.
 ```json
 {
   "user_id": "uuid-...",
+  "associated_case_id": "uuid-...", // optional, links report to a specific active case/phishing session
   "report": {
     "description": "I received a call from 0161234567 claiming to be from Bank Negara. They said my account was used for money laundering and I must transfer RM 5,000 to 'safe account' 7653-1234-5678-9012 or face arrest.",
     "phone_numbers": ["0161234567", "0197654321"],
@@ -435,6 +435,42 @@ Submit a fraud report.
       "bank_accounts": ["7653-1234-5678-9012"]
     }
   }
+}
+```
+
+---
+
+### 4.8 GET /api/v1/cases/recent
+
+Fetch recent active call sessions or phishing submissions for a user within the past 2 hours. Used by the mobile app to prompt the user for confirmation: *"We detected an active call or phishing check in the last 2 hours. Is this transaction/report related to that incident?"* If the user selects "Yes", the transaction is initiated with the corresponding `associated_case_id`. If the user selects "No", the transaction executes with no link (or the user can choose another case from history).
+
+**Parameters**:
+* `user_id` (Query, UUID, Required)
+
+**Request**:
+```http
+GET /api/v1/cases/recent?user_id=uuid-...
+X-API-Key: <key>
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "has_recent_activity": true,
+    "recent_cases": [
+      {
+        "case_id": "uuid-1234-5678",
+        "trigger_type": "CALL",
+        "caller_number": "+60161234567",
+        "risk_tier": "HIGH",
+        "created_at": "2026-07-26T18:30:00Z"
+      }
+    ]
+  },
+  "error": null,
+  "timestamp": "2026-07-26T18:32:00Z"
 }
 ```
 

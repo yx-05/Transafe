@@ -103,9 +103,7 @@ TranSafe addresses all four gaps through a multi-agent LLM architecture with ada
 > **I want** the system to identify whether the caller is a known scammer and monitor the conversation in real time,
 > **So that** I am alerted before or during my engagement with a potential fraudster.
 
-**Trigger**:
-- *Native App*: Unknown incoming PSTN/VoIP call detected by the app via `CallKit` / `TelecomManager`
-- *Web App*: User enters a WebRTC browser-to-browser call session (e.g. `app.com/call`) — browser streams local audio to the backend via WebSocket
+**Trigger**: User initiates or receives a browser-based WebRTC call session inside the Web App (`app.com/call`) — browser captures audio via `navigator.mediaDevices.getUserMedia()` and streams audio chunks to backend via WebSocket (`/ws/call/{id}/audio`).
 
 **Actors**: Web App / Mobile App, Orchestrator, Phone Worker, Research Worker
 **Outcomes**:
@@ -126,7 +124,7 @@ TranSafe addresses all four gaps through a multi-agent LLM architecture with ada
 **Trigger**: User manually submits material via app — three supported types:
 - **Text**: Raw SMS / WhatsApp / email message body
 - **URL**: A suspicious link
-- **Image**: Screenshot of the suspicious message (JPG/PNG, base64-encoded) — OCR is run server-side to extract text
+- **Image**: Screenshot of the suspicious message (JPG/PNG, base64-encoded) — text is extracted server-side via Groq Vision API (llama-3.2-11b-vision-preview)
 
 **Actors**: Mobile App, Orchestrator, Phishing Analyst Worker (Stage 1 — extract entities), Research Worker (Stage 2 — blacklist check + Tavily web search)
 **Outcomes**:
@@ -190,8 +188,8 @@ TranSafe addresses all four gaps through a multi-agent LLM architecture with ada
 |----|-------------|
 | FR-T01 | System SHALL accept telemetry events from the web/mobile app when it opens, including optional `session_metrics`, `behavioral_biometrics`, and `browser_network_fingerprint` blocks for web deployments |
 | FR-T02 | System SHALL accept transaction initiation events with amount, recipient, and session context |
-| FR-T03 | System SHALL accept call interception events with caller number and `call_channel` (`WEBRTC` or `NATIVE`); for WebRTC calls, backend SHALL receive real-time audio chunks via `/ws/call/{call_session_id}/audio` WebSocket |
-| FR-T04 | System SHALL accept phishing material submissions in three formats: plain text, URL string, and base64-encoded image (JPG/PNG); for IMAGE submissions, the backend SHALL perform OCR via Tesseract to extract text before analysis |
+| FR-T03 | System SHALL accept call interception events with caller number via Web App WebRTC audio streams (`/ws/call/{call_session_id}/audio` WebSocket) |
+| FR-T04 | System SHALL accept phishing material submissions in three formats: plain text, URL string, and base64-encoded image (JPG/PNG); for IMAGE submissions, the backend SHALL extract text using the Groq Vision API (llama-3.2-11b-vision-preview) before analysis |
 | FR-T05 | System SHALL accept fraud reports with phone number, account number, and description |
 
 ### 5.2 Orchestration & Agent Behaviour
@@ -293,7 +291,7 @@ TranSafe addresses all four gaps through a multi-agent LLM architecture with ada
 - [ ] And the XAI report identifies the phishing indicators found
 
 ### AC-03: Call Interception with Known Scammer
-- [ ] Given a phone number in the ChromaDB blacklist is submitted as an incoming call
+- [ ] Given a phone number in the Supabase pgvector blacklist is submitted as an incoming call
 - [ ] When the Phone Worker and Research Worker complete their analysis
 - [ ] Then the risk tier is HIGH
 - [ ] And the response includes the known fraud case associated with that number
@@ -301,7 +299,7 @@ TranSafe addresses all four gaps through a multi-agent LLM architecture with ada
 ### AC-04: Fraud Report → Memory Update
 - [ ] Given a user submits a fraud report with a new phone number and description
 - [ ] When the report is processed
-- [ ] Then a new document is written to ChromaDB
+- [ ] Then a new document is written to Supabase pgvector
 - [ ] And the phone number appears in subsequent Research Worker RAG queries
 
 ### AC-05: Admin Account Freeze
@@ -318,7 +316,7 @@ TranSafe addresses all four gaps through a multi-agent LLM architecture with ada
 ### AC-07: Adaptive Memory — Groq Embedding
 - [ ] Given a fraud report is submitted
 - [ ] When the LLM summarises the case
-- [ ] Then the summary is embedded and stored in ChromaDB
+- [ ] Then the summary is embedded and stored in Supabase pgvector
 - [ ] And a subsequent semantic search for similar fraud patterns returns this case
 
 ### AC-08: Biometric Challenge → Result Flow
@@ -340,7 +338,7 @@ The following items are explicitly **not** in scope for this Hackathon:
 | Real bank system integration | Mock data (Supabase + Faker) used throughout |
 | SMS/email notifications | Notifications represented as database records only |
 | Biometric hardware integration | Direct access to device fingerprint sensor / FaceID hardware is app-side only; backend receives and acts on the result |
-| PSTN/VoIP call interception (Native) | Intercepting real incoming phone calls requires `CallKit` (iOS) or `TelecomManager` (Android) — native app only; Web App uses WebRTC browser calls instead |
+| PSTN/VoIP native OS call interception | Out of scope — TranSafe standardizes 100% on browser-native WebRTC calls |
 | Multi-tenant / multi-bank support | Single-tenant Hackathon build |
 | GDPR / PDPA compliance | Architecture is designed with privacy in mind but formal compliance is out of scope |
 | Production-grade authentication (OAuth2/JWT) | Simple API key auth used for Hackathon |

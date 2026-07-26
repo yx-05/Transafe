@@ -13,7 +13,7 @@
 3. [Environment Variables Configuration](#3-environment-variables-configuration)
 4. [Supabase Setup](#4-supabase-setup)
 5. [Groq API Setup](#5-groq-api-setup)
-6. [ChromaDB Initialisation](#6-chromadb-initialisation)
+6. [Tavily Search API Setup](#6-tavily-search-api-setup)
 7. [Dependency Installation](#7-dependency-installation)
 8. [Seed Demo Data](#8-seed-demo-data)
 9. [Running the Server](#9-running-the-server)
@@ -70,10 +70,10 @@ python --version
 
 ## 3. Environment Variables Configuration
 
-Create a `.env` file in the `agents/` directory. **Never commit this file to git.**
+Create a `.env` file in the `backend/` directory. **Never commit this file to git.**
 
 ```powershell
-# agents/.env
+# backend/.env
 New-Item -Path ".env" -ItemType File
 ```
 
@@ -94,8 +94,8 @@ GROQ_API_KEY=gsk_<your-groq-api-key>
 GROQ_MODEL_PRIMARY=llama-3.3-70b-versatile
 GROQ_MODEL_FAST=llama-3.1-8b-instant
 
-# ── ChromaDB ───────────────────────────────────────────────────
-CHROMADB_PATH=./data/chromadb
+# ── Tavily API ─────────────────────────────────────────────────
+TAVILY_API_KEY=tvly-<your-tavily-api-key>
 
 # ── Server ─────────────────────────────────────────────────────
 HOST=0.0.0.0
@@ -110,12 +110,11 @@ COOLING_OFF_SECONDS=1800
 
 ### Verify `.gitignore`
 
-Ensure the following is present in `agents/.gitignore`:
+Ensure the following is present in `backend/.gitignore`:
 
 ```gitignore
 .env
 .venv/
-data/chromadb/
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -193,7 +192,7 @@ The following models are used in TranSafe:
 ### Step 3: Test Groq Connection
 
 ```python
-# Quick test — run from agents/ directory
+# Quick test — run from backend/ directory
 python -c "
 from groq import Groq
 import os
@@ -212,41 +211,15 @@ Expected: `Groq connected OK`
 
 ---
 
-## 6. ChromaDB Initialisation
+## 6. Tavily Search API Setup
 
-ChromaDB uses **local persistent storage** — no additional service setup required.
+Tavily is used by the Research Worker to search the web for public scam reports when local fraud memory similarity is low.
 
-### Create Data Directory
+### Step 1: Get API Key
 
-```powershell
-New-Item -Path "data\chromadb" -ItemType Directory -Force
-```
-
-### Seed Initial Fraud Memory
-
-Run the ChromaDB seed script to populate demo fraud cases:
-
-```powershell
-python seeds/seed_chromadb.py
-```
-
-This script creates the `fraud_memory` collection and adds:
-- 5 pre-written fraud case narratives (Macau scam, investment scam, phishing, impersonation, love scam)
-- Demo scammer phone numbers: `0161234567`, `0197654321`, `0123456789`
-- Demo scammer bank accounts: `7653-1234-5678-9012`, `8888-0000-1111-2222`
-
-### Verify ChromaDB
-
-```python
-python -c "
-import chromadb
-client = chromadb.PersistentClient(path='./data/chromadb')
-col = client.get_collection('fraud_memory')
-print(f'Fraud memory documents: {col.count()}')
-"
-```
-
-Expected: `Fraud memory documents: 5`
+1. Go to [tavily.com](https://tavily.com)
+2. Sign up for a free account (includes 1,000 free searches per month)
+3. Copy your API key → `TAVILY_API_KEY` in `.env`
 
 ---
 
@@ -254,7 +227,7 @@ Expected: `Fraud memory documents: 5`
 
 ### Update `pyproject.toml`
 
-Add the following dependencies to `agents/pyproject.toml`:
+Add the following dependencies to `backend/pyproject.toml`:
 
 ```toml
 [project]
@@ -280,8 +253,11 @@ dependencies = [
     # Supabase
     "supabase>=2.9.0",
 
-    # Vector database
-    "chromadb>=0.5.0",
+    # Web search
+    "tavily-python>=0.5.0",
+
+    # Neural TTS
+    "edge-tts>=6.1.13",
 
     # Data validation
     "pydantic>=2.9.0",
@@ -307,16 +283,17 @@ dev = [
 uv sync --all-extras
 
 # Verify installation
-uv pip list | Select-String "fastapi|langgraph|groq|supabase|chromadb"
+uv pip list | Select-String "fastapi|langgraph|groq|supabase|tavily|edge-tts"
 ```
 
 Expected output (versions may vary):
 ```
-chromadb          0.5.x
+edge-tts          6.1.x
 fastapi           0.115.x
 groq              0.12.x
 langgraph         0.2.x
 supabase          2.9.x
+tavily-python     0.5.x
 ```
 
 ---
@@ -383,7 +360,6 @@ Expected:
   "version": "1.0.0",
   "services": {
     "supabase": "connected",
-    "chromadb": "connected",
     "groq": "connected"
   }
 }
@@ -404,19 +380,17 @@ Use this checklist before every demo session to ensure all systems are operation
 ### Pre-Demo Checks
 
 #### Environment
-- [ ] `.env` file exists in `agents/` with all 11 required variables filled
-- [ ] `data/chromadb/` directory exists and is not empty
+- [ ] `.env` file exists in `backend/` with all required variables filled
 - [ ] `.venv` is activated: `(.venv)` visible in terminal prompt
 
 #### Services
 - [ ] **Groq API**: Run test command in Section 5 Step 3 → returns "Groq connected OK"
 - [ ] **Supabase**: Run verification in Section 8 → shows correct counts
-- [ ] **ChromaDB**: Run verification in Section 6 → shows 5+ documents
 
 #### Server
 - [ ] Server starts without errors: `uvicorn main:app --reload`
 - [ ] Health check passes: `GET /health` returns `"status": "healthy"`
-- [ ] All 3 services shown as "connected" in health response
+- [ ] All core services shown as "connected" in health response
 
 ### Demo Flow Tests
 
@@ -537,7 +511,7 @@ Invoke-RestMethod `
 ```
 
 - [ ] Returns `case_id` synchronously
-- [ ] Verify ChromaDB count increased by 1
+- [ ] Verify Supabase public.fraud_memory row count increased by 1
 - [ ] Subsequent call trigger with `0189999888` now returns higher risk score
 
 ---
@@ -566,17 +540,6 @@ Invoke-RestMethod `
 
 ---
 
-### Issue: ChromaDB `collection not found`
-
-**Symptom**: Research/Phone/Phishing Workers fail with `Collection 'fraud_memory' does not exist`
-
-**Fix**:
-```powershell
-python seeds/seed_chromadb.py
-```
-
----
-
 ### Issue: WebSocket connection rejected with code 4001
 
 **Symptom**: Client cannot connect to WebSocket
@@ -593,7 +556,7 @@ ws://localhost:8000/ws/session/{id}?api_key=transafe-hackathon-key-2026
 **Symptom**: Pipeline times out or feels slow during demo
 
 **Fix**:
-1. Reduce `n_results` in ChromaDB queries from 5 to 3
+1. Reduce `match_count` in pgvector queries from 5 to 3
 2. Shorten Worker system prompts (reduce token count)
 3. Switch all Workers to `llama-3.1-8b-instant` temporarily
 4. Ensure Workers are running in parallel (check LangGraph `Send` implementation)
@@ -633,6 +596,6 @@ Get-Content .env | Where-Object { $_ -notmatch "^#" -and $_ -ne "" }
 | `GROQ_API_KEY` | console.groq.com → API Keys |
 | `GROQ_MODEL_PRIMARY` | Use: `llama-3.3-70b-versatile` |
 | `GROQ_MODEL_FAST` | Use: `llama-3.1-8b-instant` |
-| `CHROMADB_PATH` | Use: `./data/chromadb` |
+| `TAVILY_API_KEY` | Get from: tavily.com |
 | `HOST` | Use: `0.0.0.0` |
 | `PORT` | Use: `8000` |

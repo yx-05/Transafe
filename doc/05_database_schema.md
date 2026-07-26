@@ -137,6 +137,7 @@ CREATE TABLE public.transactions (
     risk_score          INTEGER,        -- 0-100, set after assessment
     risk_tier           TEXT,           -- LOW | MEDIUM | HIGH
     case_id             UUID,           -- FK to fraud_cases if assessed
+    associated_case_id  UUID,           -- FK to fraud_cases if linked to a prior case (e.g. call or phishing check)
     frozen_at           TIMESTAMPTZ,
     unfreeze_at         TIMESTAMPTZ,
     initiated_at        TIMESTAMPTZ NOT NULL,
@@ -224,6 +225,64 @@ CREATE TABLE public.users (
     -- normal | elevated | high
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+```
+
+---
+
+### Table: `public.case_entities`
+
+Junction table indexing phone numbers, bank accounts, and URLs extracted from active calls, phishing messages, or transactions, linking them to a common parent fraud case.
+
+```sql
+CREATE TABLE public.case_entities (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id         UUID NOT NULL REFERENCES public.fraud_cases(id) ON DELETE CASCADE,
+    entity_type     TEXT NOT NULL, -- PHONE | ACCOUNT | URL
+    entity_value    TEXT NOT NULL,
+    extracted_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_case_entities_case_id ON public.case_entities (case_id);
+CREATE INDEX idx_case_entities_value ON public.case_entities (entity_value);
+```
+
+---
+
+### Table: `public.phishing_submissions`
+
+Stores detailed analysis for each submitted text snippet, URL, or image screenshot, directly linked to a fraud case.
+
+```sql
+CREATE TABLE public.phishing_submissions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id         UUID REFERENCES public.fraud_cases(id) ON DELETE SET NULL,
+    content_type    TEXT NOT NULL, -- TEXT | URL | IMAGE
+    raw_content     TEXT,          -- text/URL/base64 representation
+    extracted_text  TEXT,          -- text output extracted via Groq Vision
+    analysis_result JSONB,         -- Phishing Analyst worker findings
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_phishing_submissions_case_id ON public.phishing_submissions (case_id);
+```
+
+---
+
+### Table: `public.call_transcripts`
+
+Stores persistent real-time conversational utterances from intercepted phone calls, facilitating deep auditability and subsequent fraud memory compilation.
+
+```sql
+CREATE TABLE public.call_transcripts (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id         UUID NOT NULL REFERENCES public.fraud_cases(id) ON DELETE CASCADE,
+    speaker         TEXT NOT NULL,    -- CALLER | AI | USER
+    utterance       TEXT NOT NULL,
+    risk_score      INTEGER,          -- risk score of this specific utterance
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_call_transcripts_case_id ON public.call_transcripts (case_id);
 ```
 
 ---
@@ -432,6 +491,7 @@ erDiagram
         integer risk_score
         text risk_tier
         uuid case_id FK
+        uuid associated_case_id FK
         timestamptz frozen_at
         timestamptz unfreeze_at
         timestamptz initiated_at
@@ -486,13 +546,44 @@ erDiagram
         timestamptz created_at
     }
 
+    CASE_ENTITIES {
+        uuid id PK
+        uuid case_id FK
+        text entity_type
+        text entity_value
+        timestamptz extracted_at
+    }
+
+    PHISHING_SUBMISSIONS {
+        uuid id PK
+        uuid case_id FK
+        text content_type
+        text raw_content
+        text extracted_text
+        jsonb analysis_result
+        timestamptz created_at
+    }
+
+    CALL_TRANSCRIPTS {
+        uuid id PK
+        uuid case_id FK
+        text speaker
+        text utterance
+        integer risk_score
+        timestamptz created_at
+    }
+
     USERS ||--o{ ACCOUNTS : "has"
     USERS ||--o{ FRAUD_CASES : "generates"
     USERS ||--o{ TELEMETRY_EVENTS : "emits"
     ACCOUNTS ||--o{ TRANSACTIONS : "sends"
     TRANSACTIONS ||--o| FRAUD_CASES : "assessed_as"
+    TRANSACTIONS ||--o| FRAUD_CASES : "linked_to"
     FRAUD_CASES ||--o{ ADMIN_ALERTS : "triggers"
     FRAUD_CASES ||--o| FRAUD_MEMORY : "stored_in"
+    FRAUD_CASES ||--o{ CASE_ENTITIES : "contains"
+    FRAUD_CASES ||--o{ PHISHING_SUBMISSIONS : "analyzes"
+    FRAUD_CASES ||--o{ CALL_TRANSCRIPTS : "records"
 ```
 
 ---
@@ -698,6 +789,7 @@ CREATE TABLE IF NOT EXISTS public.transactions (
     risk_score          INTEGER CHECK (risk_score BETWEEN 0 AND 100),
     risk_tier           TEXT CHECK (risk_tier IN ('LOW', 'MEDIUM', 'HIGH')),
     case_id             UUID,
+    associated_case_id  UUID,
     frozen_at           TIMESTAMPTZ,
     unfreeze_at         TIMESTAMPTZ,
     initiated_at        TIMESTAMPTZ NOT NULL,
@@ -743,6 +835,11 @@ CREATE INDEX IF NOT EXISTS idx_fraud_cases_risk_tier
 CREATE INDEX IF NOT EXISTS idx_fraud_cases_created_at
     ON public.fraud_cases (created_at DESC);
 
+-- Add foreign key constraint to transactions for associated_case_id
+ALTER TABLE public.transactions 
+    ADD CONSTRAINT fk_transactions_associated_case 
+    FOREIGN KEY (associated_case_id) REFERENCES public.fraud_cases(id) ON DELETE SET NULL;
+
 -- ── ADMIN_ALERTS ───────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.admin_alerts (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -762,6 +859,43 @@ CREATE TABLE IF NOT EXISTS public.admin_alerts (
 
 CREATE INDEX IF NOT EXISTS idx_admin_alerts_status
     ON public.admin_alerts (status, created_at DESC);
+
+-- ── CASE_ENTITIES ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.case_entities (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id         UUID NOT NULL REFERENCES public.fraud_cases(id) ON DELETE CASCADE,
+    entity_type     TEXT NOT NULL CHECK (entity_type IN ('PHONE', 'ACCOUNT', 'URL')),
+    entity_value    TEXT NOT NULL,
+    extracted_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_case_entities_case_id ON public.case_entities (case_id);
+CREATE INDEX IF NOT EXISTS idx_case_entities_value ON public.case_entities (entity_value);
+
+-- ── PHISHING_SUBMISSIONS ───────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.phishing_submissions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id         UUID REFERENCES public.fraud_cases(id) ON DELETE SET NULL,
+    content_type    TEXT NOT NULL CHECK (content_type IN ('TEXT', 'URL', 'IMAGE')),
+    raw_content     TEXT,
+    extracted_text  TEXT,
+    analysis_result JSONB,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_phishing_submissions_case_id ON public.phishing_submissions (case_id);
+
+-- ── CALL_TRANSCRIPTS ───────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.call_transcripts (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id         UUID NOT NULL REFERENCES public.fraud_cases(id) ON DELETE CASCADE,
+    speaker         TEXT NOT NULL CHECK (speaker IN ('CALLER', 'AI', 'USER')),
+    utterance       TEXT NOT NULL,
+    risk_score      INTEGER CHECK (risk_score BETWEEN 0 AND 100),
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_call_transcripts_case_id ON public.call_transcripts (case_id);
 
 -- ── TELEMETRY_EVENTS ───────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS telemetry.telemetry_events (

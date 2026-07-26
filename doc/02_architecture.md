@@ -86,7 +86,7 @@ graph TB
 
     subgraph Storage["Storage Layer"]
         SB_TEL[("Supabase\nTelemetry DB\ntelemetry_events")]
-        SB_TXN[("Supabase\nTransaction DB\ntransactions\naccounts\nfraud_cases\nadmin_alerts")]
+        SB_TXN[("Supabase\nTransaction DB\ntransactions\naccounts\nfraud_cases\nadmin_alerts\ncase_entities\nphishing_submissions\ncall_transcripts")]
         SB_VEC[("Supabase pgvector\nFraud Memory\npublic.fraud_memory")]
     end
 
@@ -197,7 +197,7 @@ Executes the tier-specific backend action:
 Two logical databases (same Supabase project, separate schemas):
 
 - **`telemetry` schema**: `telemetry_events` table — stores raw app behavioural signals
-- **`public` schema**: `accounts`, `transactions`, `fraud_cases`, `admin_alerts` — core banking mock data
+- **`public` schema**: `accounts`, `transactions`, `fraud_cases`, `admin_alerts`, `case_entities`, `phishing_submissions`, `call_transcripts` — core banking mock and case correlation data
 
 Full schema in `05_database_schema.md`.
 
@@ -470,7 +470,7 @@ Cloud Services (free tier)
 ### Directory Layout (Target)
 
 ```
-agents/
+backend/
 ├── doc/                    ← Planning documents (this file lives here)
 ├── src/
 │   ├── api/                ← FastAPI routers
