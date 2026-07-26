@@ -318,6 +318,19 @@ def action_dispatcher_node(state: GraphState) -> dict: ...
 def compile_graph() -> CompiledStateGraph: ...
 ```
 
+### 6.2.1 LangSmith Tracing & Observability Integration
+
+Because the backend utilizes LangGraph for state machine orchestration, system-wide agent tracing, latency logging, and performance analysis are enabled out-of-the-box using **LangSmith**. Tracing captures all LLM inputs/outputs, node execution times, state updates, and branching routes automatically.
+
+**Zero-Code Tracing Protocol**:
+LangGraph reads standard environment variables at initialization to authenticate and stream execution traces to LangSmith asynchronously. No additional boilerplate or import wrappers are required.
+
+**Required Configuration** (in `backend/.env`):
+* `LANGCHAIN_TRACING_V2=true`: Enables tracing globally.
+* `LANGCHAIN_ENDPOINT=https://api.smith.langchain.com`: Standard cloud tracing URL.
+* `LANGCHAIN_API_KEY=lsv2_...`: Authenticates requests to LangSmith.
+* `LANGCHAIN_PROJECT=transafe-backend`: Organizes traces under this project workspace.
+
 ### 6.3 Unit Testing Strategy & Test Suite (`tests/unit/test_graph.py`)
 
 ```python

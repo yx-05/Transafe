@@ -97,6 +97,12 @@ GROQ_MODEL_FAST=llama-3.1-8b-instant
 # ── Tavily API ─────────────────────────────────────────────────
 TAVILY_API_KEY=tvly-<your-tavily-api-key>
 
+# ── LangSmith Tracking ─────────────────────────────────────────
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
+LANGCHAIN_API_KEY=lsv2_<your-langsmith-api-key>
+LANGCHAIN_PROJECT=transafe-backend
+
 # ── Server ─────────────────────────────────────────────────────
 HOST=0.0.0.0
 PORT=8000
@@ -597,5 +603,9 @@ Get-Content .env | Where-Object { $_ -notmatch "^#" -and $_ -ne "" }
 | `GROQ_MODEL_PRIMARY` | Use: `llama-3.3-70b-versatile` |
 | `GROQ_MODEL_FAST` | Use: `llama-3.1-8b-instant` |
 | `TAVILY_API_KEY` | Get from: tavily.com |
+| `LANGCHAIN_TRACING_V2` | Enable tracing: `true` |
+| `LANGCHAIN_ENDPOINT` | LangSmith endpoint: `https://api.smith.langchain.com` |
+| `LANGCHAIN_API_KEY` | Get from: smith.langchain.com |
+| `LANGCHAIN_PROJECT` | Set target project name: `transafe-backend` |
 | `HOST` | Use: `0.0.0.0` |
 | `PORT` | Use: `8000` |
