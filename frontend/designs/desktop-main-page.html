@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta content="width=device-width, initial-scale=1.0" name="viewport">
+    <title>TranSafe - Dashboard</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&amp;family=Inter:wght@400;500;600;700&amp;display=swap"
+        rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap"
+        rel="stylesheet">
+    <script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "tertiary": "#53596b",
+                        "secondary-container": "#dee3eb",
+                        "on-error": "#ffffff",
+                        "surface-variant": "#e1e3e4",
+                        "tertiary-fixed": "#dce2f7",
+                        "on-tertiary-container": "#f8f8ff",
+                        "surface-tint": "#0054d6",
+                        "on-error-container": "#93000a",
+                        "background": "#f8f9fa",
+                        "on-secondary-fixed": "#161c22",
+                        "surface-container-highest": "#e1e3e4",
+                        "surface-container-high": "#e7e8e9",
+                        "surface": "#f8f9fa",
+                        "on-background": "#191c1d",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-container": "#edeeef",
+                        "tertiary-container": "#6b7284",
+                        "secondary": "#595f66",
+                        "on-surface-variant": "#424656",
+                        "error-container": "#ffdad6",
+                        "surface-bright": "#f8f9fa",
+                        "on-secondary-container": "#5f656c",
+                        "on-secondary": "#ffffff",
+                        "tertiary-fixed-dim": "#c0c6db",
+                        "primary": "#0050cb",
+                        "primary-fixed": "#dae1ff",
+                        "on-primary": "#ffffff",
+                        "on-primary-fixed-variant": "#003fa4",
+                        "on-tertiary-fixed": "#141b2b",
+                        "on-primary-container": "#f8f7ff",
+                        "on-tertiary-fixed-variant": "#404758",
+                        "on-tertiary": "#ffffff",
+                        "surface-container-low": "#f3f4f5",
+                        "outline": "#727687",
+                        "outline-variant": "#c2c6d8",
+                        "secondary-fixed-dim": "#c2c7cf",
+                        "secondary-fixed": "#dee3eb",
+                        "primary-fixed-dim": "#b3c5ff",
+                        "inverse-surface": "#2e3132",
+                        "primary-container": "#0066ff",
+                        "error": "#ba1a1a",
+                        "on-secondary-fixed-variant": "#42474e",
+                        "surface-dim": "#d9dadb",
+                        "inverse-on-surface": "#f0f1f2",
+                        "on-primary-fixed": "#001849",
+                        "inverse-primary": "#b3c5ff",
+                        "on-surface": "#191c1d"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "gutter": "16px",
+                        "stack-lg": "40px",
+                        "stack-md": "24px",
+                        "base": "8px",
+                        "stack-sm": "12px",
+                        "container-padding": "24px"
+                    },
+                    "fontFamily": {
+                        "body-lg": ["Plus Jakarta Sans"],
+                        "body-md": ["Plus Jakarta Sans"],
+                        "headline-md": ["Plus Jakarta Sans"],
+                        "headline-lg-mobile": ["Plus Jakarta Sans"],
+                        "headline-lg": ["Plus Jakarta Sans"],
+                        "display-lg": ["Plus Jakarta Sans"],
+                        "label-md": ["Inter"],
+                        "label-sm": ["Inter"]
+                    },
+                    "fontSize": {
+                        "body-lg": ["18px", { "lineHeight": "28px", "fontWeight": "400" }],
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "700" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "700" }],
+                        "display-lg": ["40px", { "lineHeight": "48px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "label-md": ["14px", { "lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "600" }],
+                        "label-sm": ["12px", { "lineHeight": "16px", "fontWeight": "500" }]
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #f8f9fa;
+            min-height: 100vh;
+            margin: 0;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+        }
+
+        .blue-header-bg {
+            background-color: #0066ff;
+            height: 320px;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            border-bottom-left-radius: 48px;
+            border-bottom-right-radius: 48px;
+            z-index: 0;
+        }
+
+        .main-content-wrapper {
+            max-width: 1200px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 10;
+        }
+    </style>
+</head>
+
+<body class="text-on-background pb-12">
+    <!-- Blue Header Background -->
+    <div class="blue-header-bg"></div>
+    <div class="main-content-wrapper">
+        <!-- Header -->
+        <header class="flex justify-between items-center w-full px-6 py-8 md:py-12">
+            <h1 class="text-headline-md md:text-headline-lg font-bold text-on-primary">TranSafe</h1>
+            <div class="flex gap-4">
+                <button class="text-on-primary hover:bg-on-primary/10 transition-colors p-3 rounded-full duration-150">
+                    <span class="material-symbols-outlined text-2xl"
+                        style="font-variation-settings: 'FILL' 0;">notifications</span>
+                </button>
+                <button class="text-on-primary hover:bg-on-primary/10 transition-colors p-3 rounded-full duration-150">
+                    <span class="material-symbols-outlined text-2xl"
+                        style="font-variation-settings: 'FILL' 0;">help_outline</span>
+                </button>
+                <button
+                    class="hidden md:flex text-on-primary items-center gap-2 hover:bg-on-primary/10 transition-colors px-4 py-2 rounded-xl duration-150">
+                    <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">person</span>
+                    <span class="font-label-md">Profile</span>
+                </button>
+            </div>
+        </header>
+        <!-- Main Content -->
+        <main class="px-6 flex flex-col gap-8">
+            <!-- Welcome Heading -->
+            <div>
+                <h2 class="text-headline-lg md:text-display-lg text-on-primary font-bold">Welcome back, JOHN</h2>
+                <p class="text-on-primary/80 mt-1">Here is what's happening with your accounts today.</p>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                <!-- Left Column: Balance and Actions -->
+                <div class="lg:col-span-7 flex flex-col gap-8">
+                    <!-- Balance Card -->
+                    <div
+                        class="bg-surface-container-lowest rounded-[32px] p-8 md:p-10 shadow-[0_20px_50px_rgba(0,0,0,0.1)]">
+                        <p class="text-label-md font-label-md text-secondary uppercase tracking-widest mb-4">Savings
+                            Account</p>
+                        <h2 class="text-display-lg font-display-lg text-on-surface mb-8">RM 24,530.80</h2>
+                        <div class="flex flex-col sm:flex-row gap-4">
+                            <button
+                                class="flex-1 bg-primary-container text-on-primary font-label-md text-label-md py-4 px-6 rounded-[20px] hover:bg-primary transition-all flex justify-center items-center gap-2 shadow-lg shadow-primary-container/20 active:scale-[0.98]">
+                                <span class="material-symbols-outlined"
+                                    style="font-variation-settings: 'FILL' 1;">send</span>
+                                Send Money
+                            </button>
+                            <button
+                                class="flex-1 bg-secondary-container text-on-secondary-container font-label-md text-label-md py-4 px-6 rounded-[20px] hover:bg-outline-variant/30 transition-all flex justify-center items-center gap-2 active:scale-[0.98]">
+                                <span class="material-symbols-outlined"
+                                    style="font-variation-settings: 'FILL' 1;">add</span>
+                                Add Funds
+                            </button>
+                        </div>
+                    </div>
+                    <!-- Quick Actions Grid -->
+                    <div>
+                        <h3 class="text-headline-md font-headline-md text-on-surface mb-4">Quick Services</h3>
+                        <div class="grid grid-cols-3 md:grid-cols-6 gap-4">
+                            <button
+                                class="flex flex-col items-center justify-center bg-surface-container-lowest p-4 rounded-[24px] shadow-sm hover:shadow-md transition-all group aspect-square">
+                                <div
+                                    class="w-12 h-12 bg-primary-fixed rounded-[16px] flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+                                    <span class="material-symbols-outlined text-primary"
+                                        style="font-variation-settings: 'FILL' 0;">account_circle</span>
+                                </div>
+                                <span class="text-label-sm font-label-sm text-on-surface text-center">My Account</span>
+                            </button>
+                            <button
+                                class="flex flex-col items-center justify-center bg-surface-container-lowest p-4 rounded-[24px] shadow-sm hover:shadow-md transition-all group aspect-square">
+                                <div
+                                    class="w-12 h-12 bg-primary-fixed rounded-[16px] flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+                                    <span class="material-symbols-outlined text-primary"
+                                        style="font-variation-settings: 'FILL' 0;">sync_alt</span>
+                                </div>
+                                <span class="text-label-sm font-label-sm text-on-surface text-center">Transfer</span>
+                            </button>
+                            <button
+                                class="flex flex-col items-center justify-center bg-surface-container-lowest p-4 rounded-[24px] shadow-sm hover:shadow-md transition-all group aspect-square">
+                                <div
+                                    class="w-12 h-12 bg-primary-fixed rounded-[16px] flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+                                    <span class="material-symbols-outlined text-primary"
+                                        style="font-variation-settings: 'FILL' 0;">description</span>
+                                </div>
+                                <span class="text-label-sm font-label-sm text-on-surface text-center">Statement</span>
+                            </button>
+                            <button
+                                class="flex flex-col items-center justify-center bg-surface-container-lowest p-4 rounded-[24px] shadow-sm hover:shadow-md transition-all group aspect-square">
+                                <div
+                                    class="w-12 h-12 bg-primary-fixed rounded-[16px] flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+                                    <span class="material-symbols-outlined text-primary"
+                                        style="font-variation-settings: 'FILL' 0;">real_estate_agent</span>
+                                </div>
+                                <span class="text-label-sm font-label-sm text-on-surface text-center">My Loans</span>
+                            </button>
+                            <button
+                                class="flex flex-col items-center justify-center bg-surface-container-lowest p-4 rounded-[24px] shadow-sm hover:shadow-md transition-all group aspect-square">
+                                <div
+                                    class="w-12 h-12 bg-primary-fixed rounded-[16px] flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+                                    <span class="material-symbols-outlined text-primary"
+                                        style="font-variation-settings: 'FILL' 0;">account_balance_wallet</span>
+                                </div>
+                                <span class="text-label-sm font-label-sm text-on-surface text-center">Deposits</span>
+                            </button>
+                            <button
+                                class="flex flex-col items-center justify-center bg-surface-container-lowest p-4 rounded-[24px] shadow-sm hover:shadow-md transition-all group aspect-square">
+                                <div
+                                    class="w-12 h-12 bg-secondary-fixed rounded-[16px] flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+                                    <span class="material-symbols-outlined text-secondary"
+                                        style="font-variation-settings: 'FILL' 0;">add</span>
+                                </div>
+                                <span class="text-label-sm font-label-sm text-on-surface text-center">More</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <!-- Right Column: Recent Activity -->
+                <div class="lg:col-span-5">
+                    <div
+                        class="bg-surface-container-lowest p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.05)] border border-surface-container">
+                        <div class="flex justify-between items-center mb-6">
+                            <h3 class="text-headline-md font-headline-md text-on-surface">Recent Activity</h3>
+                            <button class="text-primary font-label-sm text-label-md hover:underline font-bold">See
+                                All</button>
+                        </div>
+                        <div class="flex flex-col gap-4">
+                            <!-- Transaction 1 -->
+                            <div
+                                class="p-4 rounded-[20px] flex items-center justify-between hover:bg-surface-container-low transition-colors cursor-pointer border border-transparent hover:border-surface-variant">
+                                <div class="flex items-center gap-4">
+                                    <div
+                                        class="w-12 h-12 bg-error-container rounded-full flex items-center justify-center">
+                                        <span class="material-symbols-outlined text-error"
+                                            style="font-variation-settings: 'FILL' 0;">arrow_upward</span>
+                                    </div>
+                                    <div>
+                                        <p class="text-body-md font-semibold text-on-surface">Ali Bin Ahmad</p>
+                                        <p class="text-label-sm text-secondary">Today, 10:30 AM • P2P Transfer</p>
+                                    </div>
+                                </div>
+                                <p class="text-body-md font-bold text-on-surface">-RM 150.00</p>
+                            </div>
+                            <!-- Transaction 2 -->
+                            <div
+                                class="p-4 rounded-[20px] flex items-center justify-between hover:bg-surface-container-low transition-colors cursor-pointer border border-transparent hover:border-surface-variant">
+                                <div class="flex items-center gap-4">
+                                    <div
+                                        class="w-12 h-12 bg-primary-fixed rounded-full flex items-center justify-center">
+                                        <span class="material-symbols-outlined text-primary"
+                                            style="font-variation-settings: 'FILL' 0;">arrow_downward</span>
+                                    </div>
+                                    <div>
+                                        <p class="text-body-md font-semibold text-on-surface">Salary Deposit</p>
+                                        <p class="text-label-sm text-secondary">Yesterday • Global Tech Inc.</p>
+                                    </div>
+                                </div>
+                                <p class="text-body-md font-bold text-primary">+RM 4,500.00</p>
+                            </div>
+                            <!-- Transaction 3 -->
+                            <div
+                                class="p-4 rounded-[20px] flex items-center justify-between hover:bg-surface-container-low transition-colors cursor-pointer border border-transparent hover:border-surface-variant">
+                                <div class="flex items-center gap-4">
+                                    <div
+                                        class="w-12 h-12 bg-error-container rounded-full flex items-center justify-center">
+                                        <span class="material-symbols-outlined text-error"
+                                            style="font-variation-settings: 'FILL' 0;">shopping_bag</span>
+                                    </div>
+                                    <div>
+                                        <p class="text-body-md font-semibold text-on-surface">Village Grocer</p>
+                                        <p class="text-label-sm text-secondary">2 days ago • Shopping</p>
+                                    </div>
+                                </div>
+                                <p class="text-body-md font-bold text-on-surface">-RM 84.20</p>
+                            </div>
+                        </div>
+                        <!-- Mini Promo in Sidebar -->
+                        <div class="mt-8 p-6 bg-primary rounded-[24px] text-on-primary">
+                            <h4 class="font-bold text-lg mb-1">New Savings Goal?</h4>
+                            <p class="text-sm opacity-90 mb-4">Start a goal today and get up to 4.5% p.a. interest.</p>
+                            <button class="bg-white text-primary px-4 py-2 rounded-xl text-sm font-bold">Learn
+                                More</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <!-- Desktop Navigation (Alternative to Mobile Bottom Nav) -->
+    <nav
+        class="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 flex gap-2 p-2 bg-surface-container-lowest shadow-2xl rounded-2xl border border-surface-container">
+        <button class="flex items-center gap-2 bg-primary-container text-primary rounded-xl px-6 py-3 transition-all">
+            <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">home</span>
+            <span class="text-label-md font-bold">Home</span>
+        </button>
+        <button
+            class="flex items-center gap-2 text-secondary px-6 py-3 hover:bg-secondary-container/50 transition-colors rounded-xl">
+            <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">receipt_long</span>
+            <span class="text-label-md">Activity</span>
+        </button>
+        <button
+            class="flex items-center gap-2 text-secondary px-6 py-3 hover:bg-secondary-container/50 transition-colors rounded-xl">
+            <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">verified_user</span>
+            <span class="text-label-md">Safety</span>
+        </button>
+        <button
+            class="flex items-center gap-2 text-secondary px-6 py-3 hover:bg-secondary-container/50 transition-colors rounded-xl">
+            <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">settings</span>
+            <span class="text-label-md">Settings</span>
+        </button>
+    </nav>
+</body>
+
+</html>
