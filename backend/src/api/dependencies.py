@@ -55,3 +55,31 @@ async def verify_admin_key(
             },
         )
     return x_admin_key
+
+
+async def verify_session(
+    authorization: str | None = Header(None),
+) -> dict:
+    """Verify JWT Bearer token from Authorization header.
+
+    Args:
+        authorization: Value of the Authorization request header (e.g., 'Bearer <token>').
+
+    Returns:
+        Decoded JWT payload dict containing user_id, account_number, display_name.
+
+    Raises:
+        HTTPException 401: If header is missing or token is invalid.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "MISSING_TOKEN",
+                "message": "Missing or invalid Authorization header. Expected 'Bearer <token>'.",
+            },
+        )
+
+    token = authorization.removeprefix("Bearer ").strip()
+    from src.api.auth import decode_access_token
+    return decode_access_token(token)

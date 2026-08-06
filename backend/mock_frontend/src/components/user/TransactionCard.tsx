@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { BackendConfig, XaiReport } from '../../types/api';
 import { TranSafeApiClient } from '../../services/api';
 import { SessionWebSocketClient } from '../../services/websocket';
-import { Send, Clock, FileSpreadsheet, Database } from 'lucide-react';
+import { PassiveTelemetryTracker } from '../../services/telemetryTracker';
+import { Send, Clock, FileSpreadsheet, Database, User } from 'lucide-react';
 
 interface TransactionCardProps {
   config: BackendConfig;
@@ -17,32 +18,87 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({
   onOpenXaiReport,
   onTriggerBiometrics,
 }) => {
-  const [senderAccount, setSenderAccount] = useState('12345678');
-  const [recipientAccount, setRecipientAccount] = useState('7653-1234-5678-9012'); // Seeded Macau scammer mule account
-  const [amount, setAmount] = useState('9800.00');
-  const [description, setDescription] = useState('Investment deposit transfer');
+  const [senderAccount, setSenderAccount] = useState('6373-5093-3430-8430');
+  const [recipientAccount, setRecipientAccount] = useState('1122-3344-5566-7788');
+  const [beneficiaryName, setBeneficiaryName] = useState('JJ Poor to Rich (JJPTR)');
+  const [bankName, setBankName] = useState('CIMB Bank');
+  const [amount, setAmount] = useState('15000.00');
+  const [description, setDescription] = useState('JJPTR Forex Investment Deposit');
   const [associatedCaseId, setAssociatedCaseId] = useState('');
+
+  const [activeSessionId] = useState<string>(() => `sess-${Date.now()}`);
+  const [tracker, setTracker] = useState<PassiveTelemetryTracker | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [statusLog, setStatusLog] = useState<string[]>([]);
   const [currentResult, setCurrentResult] = useState<XaiReport | null>(null);
   const [coolingOffTimer, setCoolingOffTimer] = useState<number | null>(null);
 
+  useEffect(() => {
+    const telemetry = new PassiveTelemetryTracker(config, userId, activeSessionId);
+    telemetry.start();
+    setTracker(telemetry);
+    return () => telemetry.stop();
+  }, [config.baseUrl, config.apiKey, userId, activeSessionId]);
+
+  // Auto-lookup Beneficiary Name when recipientAccount changes
+  useEffect(() => {
+    if (!recipientAccount.trim()) return;
+    const fetchBeneficiary = async () => {
+      try {
+        const res = await fetch(`${config.baseUrl}/api/v1/recipient/lookup?account_number=${encodeURIComponent(recipientAccount)}`, {
+          headers: { 'X-API-Key': config.apiKey },
+        });
+        const data = await res.json();
+        if (data?.data?.beneficiary_name) {
+          setBeneficiaryName(data.data.beneficiary_name);
+          setBankName(data.data.bank_name || 'Malaysian Retail Bank');
+        }
+      } catch (e) {
+        console.error('Beneficiary lookup error', e);
+      }
+    };
+    fetchBeneficiary();
+  }, [recipientAccount, config.baseUrl, config.apiKey]);
+
   const handleExecuteTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setStatusLog(['Initiating transaction request...']);
+    setStatusLog(['Initiating transaction request & fetching passive telemetry...']);
     setCurrentResult(null);
 
     const client = new TranSafeApiClient(config);
-    const sessionId = `sess-${Date.now()}`;
     const txId = `tx-${Math.random().toString(36).substring(2, 9)}`;
 
     try {
+      // 1. Send REST POST request enriched with beneficiary_name, session_metrics, biometrics & network fingerprint
+      const response = await client.triggerTransaction({
+        user_id: userId,
+        session_id: activeSessionId,
+        transaction: {
+          transaction_id: txId,
+          sender_account: senderAccount,
+          recipient_account: recipientAccount,
+          recipient_name: beneficiaryName,
+          amount: parseFloat(amount),
+          currency: 'MYR',
+          description,
+          initiated_at: new Date().toISOString(),
+        },
+        session_metrics: tracker?.getSessionMetrics(),
+        behavioral_biometrics: tracker?.getBehavioralBiometrics(),
+        browser_network_fingerprint: tracker?.getBrowserNetworkFingerprint(),
+        associated_case_id: associatedCaseId.trim() || undefined,
+      });
+
+      setStatusLog((prev) => [...prev, response.message]);
+
+      // 2. Connect WebSocket to stream LangGraph progress and XAI report
       const wsClient = new SessionWebSocketClient();
       wsClient.connect(
         config.baseUrl,
-        sessionId,
+        activeSessionId,
+        config.apiKey,
         (msg) => {
           if (msg.message || msg.status) {
             setStatusLog((prev) => [...prev, msg.message || msg.status || '']);
@@ -53,35 +109,19 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({
             wsClient.close();
 
             if (msg.data.risk_tier === 'MEDIUM') {
-              onTriggerBiometrics(sessionId, txId);
+              onTriggerBiometrics(activeSessionId, txId);
             } else if (msg.data.risk_tier === 'HIGH') {
               setCoolingOffTimer(1800);
             }
           }
         },
-        (_err) => {
-          setStatusLog((prev) => [...prev, 'WebSocket connection error']);
+        (err) => {
+          const errMsg = typeof err === 'string' ? err : 'WebSocket connection error';
+          setStatusLog((prev) => [...prev, `▸ Error: ${errMsg}`]);
           setLoading(false);
         },
         () => {}
       );
-
-      const response = await client.triggerTransaction({
-        user_id: userId,
-        session_id: sessionId,
-        transaction: {
-          transaction_id: txId,
-          sender_account: senderAccount,
-          recipient_account: recipientAccount,
-          amount: parseFloat(amount),
-          currency: 'MYR',
-          description,
-          initiated_at: new Date().toISOString(),
-        },
-        associated_case_id: associatedCaseId.trim() || undefined,
-      });
-
-      setStatusLog((prev) => [...prev, response.message]);
     } catch (err: any) {
       setStatusLog((prev) => [...prev, `Error: ${err.message}`]);
       setLoading(false);
@@ -100,42 +140,83 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({
 
       <div className="seeded-dataset-info">
         <Database size={14} />
-        <span>Seeded Dataset Scenarios:</span>
+        <span>Seeded 10 Real-World Malaysian Scam Companies:</span>
         <div className="preset-buttons">
           <button
             type="button"
-            className="btn-tiny"
+            className="btn-tiny btn-scam-preset"
             onClick={() => {
               setRecipientAccount('7653-1234-5678-9012');
               setAmount('12000.00');
-              setDescription('Macau Scam Bail Transfer');
+              setDescription('Pak Man Telo Deposit');
+              tracker?.trackPaste();
             }}
           >
-            Seeded Macau Mule (7653-1234-5678-9012)
+            🚨 Pak Man Telo
           </button>
 
           <button
             type="button"
-            className="btn-tiny"
+            className="btn-tiny btn-scam-preset"
             onClick={() => {
               setRecipientAccount('8888-0000-1111-2222');
               setAmount('25000.00');
-              setDescription('Crypto Investment Topup');
+              setDescription('M-Coin Investment Topup');
+              tracker?.trackPaste();
             }}
           >
-            Seeded Investment Mule (8888-0000-1111-2222)
+            🚨 MBI Group (M-Coin)
+          </button>
+
+          <button
+            type="button"
+            className="btn-tiny btn-scam-preset"
+            onClick={() => {
+              setRecipientAccount('9988-7766-5544-3322');
+              setAmount('15000.00');
+              setDescription('Gold Scheme Investment');
+              tracker?.trackPaste();
+            }}
+          >
+            🚨 Genneva Malaysia
+          </button>
+
+          <button
+            type="button"
+            className="btn-tiny btn-scam-preset"
+            onClick={() => {
+              setRecipientAccount('1122-3344-5566-7788');
+              setAmount('8000.00');
+              setDescription('JJPTR Forex Deposit');
+              tracker?.trackPaste();
+            }}
+          >
+            🚨 JJPTR
+          </button>
+
+          <button
+            type="button"
+            className="btn-tiny btn-scam-preset"
+            onClick={() => {
+              setRecipientAccount('3344-5566-7788-9900');
+              setAmount('10000.00');
+              setDescription('Richway Global Deposit');
+              tracker?.trackPaste();
+            }}
+          >
+            🚨 Richway Global
           </button>
 
           <button
             type="button"
             className="btn-tiny"
             onClick={() => {
-              setRecipientAccount('9999-5555-4444-3333');
-              setAmount('50.00');
-              setDescription('Grocery Shop Payment');
+              setRecipientAccount('1001-2002-3003-4004');
+              setAmount('150.00');
+              setDescription('Personal Transfer');
             }}
           >
-            Normal Transfer (Safe Account)
+            ✅ Normal Safe Transfer
           </button>
         </div>
       </div>
@@ -148,6 +229,8 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({
               type="text"
               value={senderAccount}
               onChange={(e) => setSenderAccount(e.target.value)}
+              onKeyDown={() => tracker?.trackKeyDown()}
+              onKeyUp={() => tracker?.trackKeyUp()}
               required
             />
           </div>
@@ -157,9 +240,22 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({
               type="text"
               value={recipientAccount}
               onChange={(e) => setRecipientAccount(e.target.value)}
+              onKeyDown={(e) => tracker?.trackKeyDown(e.key)}
+              onKeyUp={() => tracker?.trackKeyUp()}
+              onPaste={() => tracker?.trackPaste('recipientAccount')}
               placeholder="e.g. 7653-1234-5678-9012"
               required
             />
+          </div>
+        </div>
+
+        {/* Live Beneficiary Account Name Lookup Card */}
+        <div className="beneficiary-lookup-card">
+          <User size={15} className="text-blue-400" />
+          <div className="beneficiary-info-text">
+            <span>Verified Beneficiary Name:</span>
+            <strong>{beneficiaryName}</strong>
+            <span className="bank-tag">({bankName})</span>
           </div>
         </div>
 
@@ -171,60 +267,87 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({
               step="0.01"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
+              onKeyDown={(e) => tracker?.trackKeyDown(e.key)}
+              onKeyUp={() => tracker?.trackKeyUp()}
               required
             />
           </div>
           <div className="form-group">
-            <label>Description</label>
+            <label>Transfer Description</label>
             <input
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
+              onKeyDown={(e) => tracker?.trackKeyDown(e.key)}
+              onKeyUp={() => tracker?.trackKeyUp()}
+              placeholder="Purpose of transfer"
+              required
             />
           </div>
         </div>
 
-        <div className="form-group">
-          <label>Optional Associated Case ID (Link with active call/phishing case)</label>
-          <input
-            type="text"
-            value={associatedCaseId}
-            onChange={(e) => setAssociatedCaseId(e.target.value)}
-            placeholder="e.g. case-abc123"
-          />
+        <div className="form-row">
+          <div className="form-group">
+            <label>Associated Scam Call / Case ID (Optional Relay)</label>
+            <input
+              type="text"
+              value={associatedCaseId}
+              onChange={(e) => setAssociatedCaseId(e.target.value)}
+              placeholder="e.g. call-1785423180"
+            />
+          </div>
         </div>
 
         <button type="submit" className="btn-primary" disabled={loading}>
-          {loading ? 'Evaluating Risk via LangGraph & Supabase RAG...' : 'Simulate Fund Transfer'}
+          {loading ? 'Analyzing Risk via Multi-Agent Graph...' : 'Simulate Fund Transfer'}
         </button>
       </form>
 
+      {/* Real-time Status Progress Output */}
       {statusLog.length > 0 && (
-        <div className="status-log-box">
-          <label>Live Agent Status Stream:</label>
-          <div className="log-entries">
+        <div className="status-log-container">
+          <h4>Live Agent Status Stream</h4>
+          <div className="status-log-list">
             {statusLog.map((log, index) => (
-              <div key={index} className="log-line">▸ {log}</div>
+              <div key={index} className="status-log-item">
+                <Clock size={14} />
+                <span>{log}</span>
+              </div>
             ))}
           </div>
         </div>
       )}
 
+      {/* Cooling-Off Period Banner */}
+      {coolingOffTimer !== null && (
+        <div className="cooling-off-banner">
+          <Clock className="text-red-400 animate-spin" size={24} />
+          <div>
+            <h4>High-Risk Transaction Frozen (30-Min Cooling Off)</h4>
+            <p>
+              TranSafe Multi-Agent network blocked execution due to confirmed scam activity.
+              Account unfreezes in {Math.floor(coolingOffTimer / 60)}m {coolingOffTimer % 60}s.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* XAI Result Brief */}
       {currentResult && (
-        <div className={`result-box tier-${currentResult.risk_tier.toLowerCase()}`}>
-          <div className="result-header">
-            <h4>Outcome: {currentResult.risk_tier} RISK (Score: {currentResult.risk_score})</h4>
-            <button className="btn-small" onClick={() => onOpenXaiReport(currentResult)}>
-              <FileSpreadsheet size={14} /> View XAI Report
+        <div className={`xai-brief-banner risk-${currentResult.risk_tier.toLowerCase()}`}>
+          <div className="xai-brief-header">
+            <div>
+              <span className="risk-badge">{currentResult.risk_tier} RISK</span>
+              <strong>Score: {currentResult.risk_score} / 100</strong>
+            </div>
+            <button
+              className="btn-secondary btn-sm"
+              onClick={() => onOpenXaiReport(currentResult)}
+            >
+              <FileSpreadsheet size={16} /> View Full XAI Report
             </button>
           </div>
-          <p>{currentResult.verdict_summary}</p>
-          {coolingOffTimer && (
-            <div className="cooling-off-alert">
-              <Clock size={18} />
-              <span>Cooling-off freeze active. Unfreezes in {Math.floor(coolingOffTimer / 60)} minutes.</span>
-            </div>
-          )}
+          <p>{currentResult.recommendation}</p>
         </div>
       )}
     </div>

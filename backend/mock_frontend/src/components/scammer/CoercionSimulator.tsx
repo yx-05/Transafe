@@ -30,30 +30,6 @@ export const CoercionSimulator: React.FC<CoercionSimulatorProps> = ({
     const txId = `tx-coercion-${Date.now()}`;
 
     try {
-      const wsClient = new SessionWebSocketClient();
-      wsClient.connect(
-        config.baseUrl,
-        sessionId,
-        (msg) => {
-          if (msg.message || msg.status) {
-            setResultLog((prev) => [...prev, msg.message || msg.status || '']);
-          }
-          if (msg.type === 'result' && msg.data) {
-            setResultLog((prev) => [
-              ...prev,
-              `FINAL VERDICT: ${msg.data?.risk_tier} RISK (${msg.data?.risk_score}/100) — Action: ${msg.data?.action_taken}`,
-            ]);
-            setLoading(false);
-            wsClient.close();
-          }
-        },
-        (_err) => {
-          setResultLog((prev) => [...prev, 'WebSocket Connection Error']);
-          setLoading(false);
-        },
-        () => {}
-      );
-
       // Trigger transaction with anomalous telemetry & high amount
       await client.triggerTransaction({
         user_id: victimUserId,
@@ -68,6 +44,32 @@ export const CoercionSimulator: React.FC<CoercionSimulatorProps> = ({
           initiated_at: new Date().toISOString(),
         },
       });
+
+      const wsClient = new SessionWebSocketClient();
+      wsClient.connect(
+        config.baseUrl,
+        sessionId,
+        config.apiKey,
+        (msg) => {
+          if (msg.message || msg.status) {
+            setResultLog((prev) => [...prev, msg.message || msg.status || '']);
+          }
+          if (msg.type === 'result' && msg.data) {
+            setResultLog((prev) => [
+              ...prev,
+              `FINAL VERDICT: ${msg.data?.risk_tier} RISK (${msg.data?.risk_score}/100) — Action: ${msg.data?.action_taken}`,
+            ]);
+            setLoading(false);
+            wsClient.close();
+          }
+        },
+        (err) => {
+          const errMsg = typeof err === 'string' ? err : 'WebSocket connection error';
+          setResultLog((prev) => [...prev, `▸ Error: ${errMsg}`]);
+          setLoading(false);
+        },
+        () => {}
+      );
     } catch (err: any) {
       setResultLog((prev) => [...prev, `Error: ${err.message}`]);
       setLoading(false);

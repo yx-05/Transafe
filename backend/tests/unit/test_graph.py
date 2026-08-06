@@ -36,7 +36,7 @@ async def test_orchestrator_routing_call_and_telemetry() -> None:
         "status_messages": [],
     }
     call_res = await orchestrator_node(call_state)
-    assert call_res["workers_to_activate"] == ["phone", "research"]
+    assert call_res["workers_to_activate"] == ["phone", "research", "phishing"]
 
     telemetry_state: GraphState = {
         "trigger_type": "TELEMETRY",

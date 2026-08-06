@@ -61,10 +61,20 @@ export const PhishingCard: React.FC<PhishingCardProps> = ({
     const sessionId = `sess-phish-${Date.now()}`;
 
     try {
+      await client.triggerPhishing({
+        user_id: userId,
+        session_id: sessionId,
+        phishing_material: {
+          source_type: sourceType,
+          content: contentToSend,
+        },
+      });
+
       const wsClient = new SessionWebSocketClient();
       wsClient.connect(
         config.baseUrl,
         sessionId,
+        config.apiKey,
         (msg) => {
           if (msg.message || msg.status) {
             setStatusLog((prev) => [...prev, msg.message || msg.status || '']);
@@ -75,21 +85,13 @@ export const PhishingCard: React.FC<PhishingCardProps> = ({
             wsClient.close();
           }
         },
-        (_err) => {
-          setStatusLog((prev) => [...prev, 'WebSocket error']);
+        (err) => {
+          const errMsg = typeof err === 'string' ? err : 'WebSocket connection error';
+          setStatusLog((prev) => [...prev, `▸ Error: ${errMsg}`]);
           setLoading(false);
         },
         () => {}
       );
-
-      await client.triggerPhishing({
-        user_id: userId,
-        session_id: sessionId,
-        phishing_material: {
-          source_type: sourceType,
-          content: contentToSend,
-        },
-      });
     } catch (err: any) {
       setStatusLog((prev) => [...prev, `Error: ${err.message}`]);
       setLoading(false);

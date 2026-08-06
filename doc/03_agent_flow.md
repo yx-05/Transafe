@@ -332,14 +332,23 @@ Provide your risk assessment. If the data is clean (e.g. normal flight times, kn
 **Responsibility**: Perform background investigation on suspicious entities (phone numbers, bank account numbers, URLs) by querying the internal fraud knowledge base via RAG. When confidence is low, fall back to Tavily web search to check if the entity is publicly reported as a scam. In REPORT mode, ingest new fraud data into pgvector.
 
 **Tools & Skills**:
-* **`check_blacklist(phone: str = None, url: str = None) -> list[dict]`**: Search the `public.fraud_memory` database using pgvector cosine similarity at a high matching threshold (≥ 0.80).
+* **`hybrid_search_fraud_memory(query_text: str, bank_account: str = None, phone_number: str = None, threshold: float = 0.45, top_k: int = 5) -> list[dict]`**: Executes Hybrid Search combining BM25 Lexical / Exact Token Filtering (for accounts and phone numbers) with 768-dimensional pgvector dense semantic vector RAG. Guarantees 100% precision on discrete account tokens while maintaining broad semantic recall on fraud narratives.
 * **`search_fraud_memory(query: str, threshold: float = 0.75, top_k: int = 5) -> list[dict]`**: Perform a semantic search on the `public.fraud_memory` table using a text query, mapping text to a 768-dimensional embedding. Returns matching cases with details on fraud type, phone numbers, bank accounts, and similarity scores.
-* **`tavily_search(entities: list[str]) -> list[dict]`**: Query the Tavily Search API targeting Malaysian forums and official blacklist domains (e.g. `semak.my`, `rmp.gov.my`, `bnm.gov.my`, `lowyat.net`) to find public fraud complaints.
-* **`add_fraud_memory(case_id: str, fraud_type: str, content: str, metadata: dict) -> dict`**: Insert a new record into `public.fraud_memory` with an automatically generated Groq text embedding.
+* **`tavily_search(entities: list[str]) -> list[dict]`**: Query the Tavily Search API using clean brand/company queries targeting Malaysian forums and official blacklist domains (e.g. `bnm.gov.my`, `sc.com.my`, `lowyat.net`) to find public fraud complaints.
+* **`add_fraud_memory(case_id: str, fraud_type: str, content: str, metadata: dict) -> dict`**: Insert a new record into `public.fraud_memory` with an automatically generated text embedding.
 
 **QUERY mode** (TRANSACTION, CALL):
 ```python
-from src.db.vector_store import search_fraud_memory, check_blacklist
+from src.db.vector_store import hybrid_search_fraud_memory
+
+# Execute Hybrid Search (BM25 Exact Token Match + Dense pgvector RAG)
+internal_hits = hybrid_search_fraud_memory(
+    query_text=recipient_name,
+    bank_account=recipient_account,
+    phone_number=phone_number,
+    threshold=0.45,
+    top_k=5,
+)
 
 # Extract entities from trigger payload
 entities = extract_entities(state["trigger_payload"])
@@ -359,10 +368,14 @@ results = search_fraud_memory(
     top_k=5
 )
 
-# If pgvector confidence is low AND entity is a phone/URL, run Tavily
-if not results or max(r["similarity"] for r in results) < 0.75:
-    tavily_results = tavily_search(entities)  # see Tavily section below
+# API Cost Optimization Strategy (Tavily Conditional Short-Circuiting)
+# If internal Hybrid Search max_sim >= 0.80, Tavily web search is short-circuited to conserve API quota and reduce latency:
+if max_sim < 0.80:
+    tavily_results = tavily_search(clean_search_terms)
 ```
+
+> **API Cost Optimization Strategy**:
+> External Tavily web search is conditionally triggered **only when** internal Hybrid Search returns `max_sim < 0.80`. If a high-confidence match (`≥ 0.80`) exists in internal DB, web search is short-circuited to save API costs and optimize transaction latency.
 
 **QUERY mode — PHISHING (stage 2)**: Research Worker reads `state["extracted_entities"]` set by Phishing Worker in stage 1:
 ```python

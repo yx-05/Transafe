@@ -63,7 +63,35 @@ export class TranSafeApiClient {
     };
   }
 
+  // Generic HTTP POST helper
+  async post<T = any>(endpoint: string, body: any = {}): Promise<T> {
+    const url = endpoint.startsWith('http') ? endpoint : `${this.config.baseUrl}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+    return fetchEnvelope<T>(url, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify(body),
+    });
+  }
+
+  async updateSttEngine(callSessionId: string, engine: string): Promise<any> {
+    return this.post(`/api/v1/call/${encodeURIComponent(callSessionId)}/stt_engine?engine=${encodeURIComponent(engine)}`);
+  }
+
   // --- USER TRIGGERS ---
+
+  async ingestTelemetryEvent(payload: {
+    user_id: string;
+    session_id: string;
+    device_id?: string;
+    event_type: string;
+    event_value?: string;
+  }): Promise<any> {
+    return fetchEnvelope<any>(`${this.config.baseUrl}/api/v1/telemetry/event`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify(payload),
+    });
+  }
 
   async triggerTelemetry(payload: TelemetryTriggerRequest): Promise<TelemetryTriggerData> {
     return fetchEnvelope<TelemetryTriggerData>(`${this.config.baseUrl}/api/v1/trigger/telemetry`, {
@@ -116,6 +144,35 @@ export class TranSafeApiClient {
   async takeoverCall(sessionId: string): Promise<CallTakeoverData> {
     return fetchEnvelope<CallTakeoverData>(`${this.config.baseUrl}/api/v1/call/${sessionId}/takeover`, {
       method: 'POST',
+      headers: this.headers,
+    });
+  }
+
+  async fetchTtsAudio(callSessionId: string, ttsId: string): Promise<Blob> {
+    const url =
+      `${this.config.baseUrl}/api/v1/call/${encodeURIComponent(callSessionId)}/tts/${encodeURIComponent(ttsId)}`;
+    const res = await fetch(url, { headers: this.headers });
+    if (!res.ok) throw new Error(`TTS fetch failed: ${res.status}`);
+    return res.blob();
+  }
+
+  async answerCall(callSessionId: string): Promise<{ call_session_id: string; status: string; message: string }> {
+    return fetchEnvelope<{ call_session_id: string; status: string; message: string }>(`${this.config.baseUrl}/api/v1/call/${encodeURIComponent(callSessionId)}/answer`, {
+      method: 'POST',
+      headers: this.headers,
+    });
+  }
+
+  async declineCall(callSessionId: string): Promise<{ call_session_id: string; status: string; message: string }> {
+    return fetchEnvelope<{ call_session_id: string; status: string; message: string }>(`${this.config.baseUrl}/api/v1/call/${encodeURIComponent(callSessionId)}/decline`, {
+      method: 'POST',
+      headers: this.headers,
+    });
+  }
+
+  async getActiveCall(userId: string): Promise<Record<string, unknown> | null> {
+    return fetchEnvelope<Record<string, unknown> | null>(`${this.config.baseUrl}/api/v1/call/active?user_id=${encodeURIComponent(userId)}`, {
+      method: 'GET',
       headers: this.headers,
     });
   }

@@ -15,7 +15,7 @@ export const UserHeader: React.FC<UserHeaderProps> = ({ title = 'TranSafe', show
   const [notifRightOffset, setNotifRightOffset] = useState<number | null>(null);
   const [helpRightOffset, setHelpRightOffset] = useState<number | null>(null);
 
-  const computeRightOffset = (btnRef: React.RefObject<HTMLButtonElement>, dropdownWidth: number): number | null => {
+  const computeRightOffset = (btnRef: React.RefObject<HTMLButtonElement | null>, dropdownWidth: number): number | null => {
     if (!btnRef.current) return null;
     const clientWidth = document.documentElement.clientWidth;
     const btnRight = Math.round(btnRef.current.getBoundingClientRect().right);
@@ -106,15 +106,16 @@ export const UserHeader: React.FC<UserHeaderProps> = ({ title = 'TranSafe', show
           </span>
         </button>
 
-        {/* Profile Button - hidden on mobile */}
+        {/* Profile Button */}
         <button
-          style={{ color: '#ffffff', display: 'none', alignItems: 'center', gap: '8px', padding: '8px 16px', borderRadius: '12px', border: 'none', background: 'none', cursor: 'pointer', transition: 'background-color 0.15s', fontFamily: 'Inter, sans-serif', fontWeight: 500, fontSize: '14px' }}
+          onClick={() => navigate('/profile')}
+          style={{ color: '#ffffff', display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', borderRadius: '12px', border: 'none', background: 'none', cursor: 'pointer', transition: 'background-color 0.15s', fontFamily: 'Inter, sans-serif', fontWeight: 500, fontSize: '14px' }}
           title="Profile"
           onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)')}
           onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
         >
-          <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 0" }}>person</span>
-          <span>Profile</span>
+          <span className="material-symbols-outlined" style={{ fontSize: '24px', fontVariationSettings: "'FILL' 0" }}>person</span>
+          <span className="hidden sm:inline">Profile</span>
         </button>
       </div>
 

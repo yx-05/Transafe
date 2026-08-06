@@ -141,25 +141,18 @@ Keep the verdict_summary under 50 words. Use simple language a non-technical use
     )
     recommendation = "Please review your transactions and report any unrecognized activity."
 
-    api_key = os.getenv("GROQ_API_KEY")
-    if api_key:
-        try:
-            client = Groq(api_key=api_key)
-            response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-                temperature=0.0,
-            )
-            if response.choices and response.choices[0].message.content:
-                content = json.loads(response.choices[0].message.content)
-                verdict_summary = content.get("verdict_summary", verdict_summary)
-                verdict_summary_ms = content.get(
-                    "verdict_summary_ms", verdict_summary_ms
-                )
-                recommendation = content.get("recommendation", recommendation)
-        except Exception as e:  # noqa: BLE001
-            status_messages.append(f"XAI Node: LLM generation fallback: {e}")
+    try:
+        from langchain_core.messages import HumanMessage
+        from src.agents.llm import extract_json_object, invoke_groq_with_key_rotation
+
+        response = invoke_groq_with_key_rotation([HumanMessage(content=prompt)])
+        content = extract_json_object(response.content if hasattr(response, "content") else response)
+        if isinstance(content, dict):
+            verdict_summary = content.get("verdict_summary", verdict_summary)
+            verdict_summary_ms = content.get("verdict_summary_ms", verdict_summary_ms)
+            recommendation = content.get("recommendation", recommendation)
+    except Exception as e:  # noqa: BLE001
+        status_messages.append(f"XAI Node: LLM generation fallback: {e}")
 
 
     xai_report: dict[str, Any] = {

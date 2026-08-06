@@ -297,6 +297,12 @@ def test_websocket_call_events():
         m1 = websocket.receive_json()
         assert m1["type"] == "pre_check_result"
 
+        websocket.send_json({
+            "type": "broadcast_transcript",
+            "speaker": "SCAMMER",
+            "text": "Transfer money to safe account immediately!",
+        })
+
         m2 = websocket.receive_json()
         assert m2["type"] == "transcript"
 

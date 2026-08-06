@@ -14,11 +14,25 @@ from src.agents.prompts import build_telemetry_prompt
 from src.agents.state import GraphState, WorkerFinding
 from src.db.supabase import fetch_telemetry_events
 
+from src.agents.llm import extract_json_object, invoke_groq_with_key_rotation
+
 logger = logging.getLogger(__name__)
 
-# Default LLM for telemetry worker
-_raw_key = os.getenv("GROQ_API_KEY") or "gsk_placeholder_key_for_initialization"
-llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0.0, api_key=SecretStr(_raw_key))
+
+def get_telemetry_llm(model_name: str = "llama-3.1-8b-instant") -> ChatGroq:
+    """Get ChatGroq LLM instance reading GROQ_API_KEY dynamically at runtime."""
+    raw_key = os.getenv("GROQ_API_KEY") or "gsk_placeholder_key_for_initialization"
+    return ChatGroq(model=model_name, temperature=0.0, api_key=SecretStr(raw_key))
+
+
+class DynamicTelemetryLLM:
+    """Dynamic LLM proxy reading GROQ_API_KEY dynamically with multi-key rotation and fallback."""
+
+    def invoke(self, messages: Any, **kwargs: Any) -> Any:
+        return invoke_groq_with_key_rotation(messages, preferred_model="llama-3.1-8b-instant")
+
+
+llm = DynamicTelemetryLLM()
 
 
 TELEMETRY_SYSTEM_PROMPT = """You are an expert fraud behavioral biometrics analyst at a retail bank.
@@ -63,6 +77,7 @@ def _rule_based_telemetry_analysis(
         for e in events
         if e.get("event_type") in ("SCREEN_SHARE_DETECTED", "REMOTE_ACCESS")
         or e.get("event_value") == "SCREEN_SHARE_DETECTED"
+        or e.get("event_value") is True
     ]
 
     if flight_times:
@@ -126,7 +141,7 @@ def telemetry_worker_node(state: GraphState) -> dict[str, Any]:
     known_device_id_raw = payload.get("known_device_id")
     known_device_id = str(known_device_id_raw) if known_device_id_raw is not None else None
 
-    # Fetch events or read from payload safely
+    # Fetch events from payload, DB, or session_store memory
     events: list[dict[str, Any]] = []
     if "telemetry_events" in payload and isinstance(payload["telemetry_events"], list):
         events = payload["telemetry_events"]
@@ -141,24 +156,55 @@ def telemetry_worker_node(state: GraphState) -> dict[str, Any]:
             logger.warning(f"Failed to fetch telemetry events from DB: {err}")
             events = []
 
+    # Read from in-memory session_store if DB returned empty
+    if not events and session_id:
+        from src.api.session_store import session_store
+        events = session_store.get_telemetry_events(session_id)
+
+    # If events log is empty, construct events from session_metrics / behavioral_biometrics in payload
+    if not events:
+        metrics = payload.get("session_metrics") or {}
+        biometrics = payload.get("behavioral_biometrics") or {}
+        if biometrics.get("avg_flight_time_ms"):
+            events.append({"event_type": "KEYSTROKE", "event_value": biometrics.get("avg_flight_time_ms")})
+        if biometrics.get("screen_share_detected"):
+            events.append({"event_type": "SCREEN_SHARE_DETECTED", "event_value": True})
+        if metrics.get("copy_paste_events"):
+            for _ in range(int(metrics.get("copy_paste_events"))):
+                events.append({"event_type": "COPY_PASTE", "event_value": True})
+        if metrics.get("tab_switches"):
+            for _ in range(int(metrics.get("tab_switches"))):
+                events.append({"event_type": "TAB_SWITCH", "event_value": True})
+
     # Run default rule-based analysis as baseline
     finding = _rule_based_telemetry_analysis(events, device_id, known_device_id)
 
     # Attempt LLM analysis if LLM is active / mocked
     try:
-        prompt_text = build_telemetry_prompt(user_id, session_id, device_id, events)
+        prompt_text = build_telemetry_prompt(
+            user_id=user_id,
+            session_id=session_id,
+            device_id=device_id,
+            events=events,
+            metrics=payload.get("session_metrics"),
+            biometrics=payload.get("behavioral_biometrics"),
+            fingerprint=payload.get("browser_network_fingerprint"),
+        )
         messages = [
             SystemMessage(content=TELEMETRY_SYSTEM_PROMPT),
             HumanMessage(content=prompt_text),
         ]
         llm_response = llm.invoke(messages)
-        content = str(llm_response.content).strip()
-
-        if content.startswith("{") and content.endswith("}"):
-            parsed = json.loads(content)
+        parsed = extract_json_object(llm_response.content if hasattr(llm_response, "content") else llm_response)
+        if isinstance(parsed, dict):
             score = int(parsed.get("score", finding.score))
             confidence = float(parsed.get("confidence", finding.confidence))
             evidence = list(parsed.get("evidence", finding.evidence))
+            if not evidence:
+                if score == 0:
+                    evidence = ["Device fingerprint, typing cadence, and behavioral biometrics are within normal ranges."]
+                else:
+                    evidence = [f"Behavioral telemetry risk evaluated with score {score}/100."]
             finding = WorkerFinding(
                 worker="telemetry",
                 score=score,

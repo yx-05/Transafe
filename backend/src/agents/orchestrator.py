@@ -9,7 +9,7 @@ from src.db.supabase import fetch_case_context
 TRIGGER_WORKER_MAP: dict[str, list[str]] = {
     "TELEMETRY": ["telemetry"],
     "TRANSACTION": ["financial", "telemetry", "research"],
-    "CALL": ["phone", "research"],
+    "CALL": ["phone", "research", "phishing"],
     "PHISHING": ["phishing"],
     "REPORT": ["research"],
 }

@@ -331,3 +331,27 @@ def compile_graph():
     
     return workflow.compile()
 ```
+
+---
+
+## 8. Enterprise Resiliency & Fraud Engine Updates (August 2026)
+
+### 8.1 Central Groq LLM Multi-Key Rotation Pool (`src/agents/llm.py`)
+To prevent system outages caused by Groq API 429 rate limit errors (100,000 TPD limit on `llama-3.3-70b-versatile`), a centralized key-rotation manager was introduced:
+* **Dynamic Key Discovery**: Automatically loads `GROQ_API_KEY`, `GROQ_API_KEY_1`, `GROQ_API_KEY_2`, `GROQ_API_KEY_3`, and environment key lists.
+* **Tier 1 Multi-Key Rotation**: Tries primary model (`llama-3.3-70b-versatile`) across all available API keys sequentially.
+* **Tier 2 Model Fallback**: Automatically switches to `llama-3.1-8b-instant` (500,000 TPD limit) if all keys hit rate limits.
+* **Robust JSON Extraction**: `extract_json_object()` parses embedded JSON payloads from smaller model responses that contain conversational preambles or markdown fences.
+
+### 8.2 Multi-Tiered Tavily Fraud Intelligence Search (`src/services/tavily.py`)
+* **Tier 1 (Regulatory Alert Lists)**: Targets `bnm.gov.my` (Bank Negara) and `sc.com.my` (Securities Commission).
+* **Tier 2 (Enforcement & Community Forums)**: Targets `rmp.gov.my` (PDRM CCID) and `forum.lowyat.net`.
+* **Tier 3 (Unconstrained Broad Search)**: Automatically triggers if domain-restricted searches return low entity relevance, ensuring explicit scam articles (e.g., `Bestino Group`, `JJPTR`, `Genneva`) are retrieved.
+* **Slot Allocation**: Guarantees Slot #1 is occupied by an official BNM/SC regulatory alert notice whenever available.
+
+### 8.3 Historical Baseline Isolation & Pending Transaction Filtering (`src/db/supabase.py` & `financial.py`)
+* Excludes the current pending transaction ID (`current_tx_id`) and status `'pending'` / `'frozen_pending'` from `fetch_user_transaction_history()` queries.
+* Prevents newly initiated transactions from polluting customer 90-day baselines or false-flagging first-time recipients as known recipients.
+
+### 8.4 Non-Empty Evidence Safety Net across All Workers
+* All 5 worker agents (`Telemetry`, `Financial`, `Research`, `Phishing`, `Phone`) enforce a mandatory default evidence string when `score == 0` or evidence is empty, ensuring UI explanation cards never render blank.

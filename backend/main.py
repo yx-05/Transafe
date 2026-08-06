@@ -1,19 +1,33 @@
 """TranSafe FastAPI Main Application Entry Point."""
 
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.agents.graph import compile_graph
 from src.api.admin import router as admin_router
+from src.api.auth import router as auth_router
 from src.api.triggers import router as triggers_router
 from src.api.websocket import websocket_router
 from src.api.websocket_call import call_ws_router
+
+import logging
+
+load_dotenv()
+
+# Filter out high-frequency /call/active polling noise from Uvicorn access log
+class EndpointFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.getMessage().find("/call/active") == -1
+
+logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
 
 @asynccontextmanager
@@ -83,7 +97,13 @@ async def health_check() -> dict[str, Any]:
 
 
 # Mount API routers
+app.include_router(auth_router, prefix="/api/v1")
 app.include_router(triggers_router, prefix="/api/v1")
 app.include_router(websocket_router)
 app.include_router(call_ws_router)
 app.include_router(admin_router)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

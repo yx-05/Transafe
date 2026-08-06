@@ -6,13 +6,17 @@ export class SessionWebSocketClient {
   connect(
     baseUrl: string,
     sessionId: string,
+    apiKey: string,
     onMessage: (msg: WsSessionMessage) => void,
-    onError: (err: Event) => void,
+    onError: (err: Event | string) => void,
     onClose: () => void
   ) {
     this.close();
 
-    const wsUrl = baseUrl.replace(/^http/, 'ws') + `/ws/session/${encodeURIComponent(sessionId)}`;
+    const wsUrl =
+      baseUrl.replace(/^http/, 'ws') +
+      `/ws/session/${encodeURIComponent(sessionId)}?api_key=${encodeURIComponent(apiKey)}`;
+    
     this.ws = new WebSocket(wsUrl);
 
     this.ws.onmessage = (event) => {
@@ -28,7 +32,12 @@ export class SessionWebSocketClient {
       onError(err);
     };
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (event) => {
+      if (event.code === 4001) {
+        onError('WebSocket Auth Failed (Code 4001: Invalid API Key)');
+      } else if (event.code === 4004) {
+        onError('WebSocket Session Not Found (Code 4004)');
+      }
       onClose();
     };
   }
@@ -47,13 +56,17 @@ export class CallEventsWebSocketClient {
   connect(
     baseUrl: string,
     callSessionId: string,
+    apiKey: string,
     onMessage: (msg: WsCallEventMessage) => void,
-    onError: (err: Event) => void,
+    onError: (err: Event | string) => void,
     onClose: () => void
   ) {
     this.close();
 
-    const wsUrl = baseUrl.replace(/^http/, 'ws') + `/ws/call/${encodeURIComponent(callSessionId)}/events`;
+    const wsUrl =
+      baseUrl.replace(/^http/, 'ws') +
+      `/ws/call/${encodeURIComponent(callSessionId)}/events?api_key=${encodeURIComponent(apiKey)}`;
+    
     this.ws = new WebSocket(wsUrl);
 
     this.ws.onmessage = (event) => {
@@ -69,7 +82,10 @@ export class CallEventsWebSocketClient {
       onError(err);
     };
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (event) => {
+      if (event.code === 4001) {
+        onError('Call Events WS Auth Failed (Code 4001: Invalid API Key)');
+      }
       onClose();
     };
   }

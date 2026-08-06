@@ -38,7 +38,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       <nav className="tab-navigation">
         <button
-          className={`tab-btn ${activeTab === 'user' ? 'active' : ''}`}
+          className={`tab-btn tab-customer ${activeTab === 'user' ? 'active' : ''}`}
           onClick={() => onSelectTab('user')}
         >
           <User size={18} />
@@ -46,7 +46,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </button>
 
         <button
-          className={`tab-btn ${activeTab === 'scammer' ? 'active' : ''}`}
+          className={`tab-btn tab-scammer ${activeTab === 'scammer' ? 'active' : ''}`}
           onClick={() => onSelectTab('scammer')}
         >
           <Skull size={18} />
@@ -54,7 +54,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </button>
 
         <button
-          className={`tab-btn ${activeTab === 'admin' ? 'active' : ''}`}
+          className={`tab-btn tab-admin ${activeTab === 'admin' ? 'active' : ''}`}
           onClick={() => onSelectTab('admin')}
         >
           <LayoutDashboard size={18} />

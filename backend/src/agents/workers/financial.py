@@ -10,15 +10,29 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 from pydantic import SecretStr
 
+from src.agents.llm import extract_json_object, invoke_groq_with_key_rotation
 from src.agents.prompts import build_financial_prompt
 from src.agents.state import GraphState, WorkerFinding
 from src.db.supabase import fetch_user_transaction_history
 
 logger = logging.getLogger(__name__)
 
-# Default LLM for financial worker
-_api_key = os.getenv("GROQ_API_KEY") or "gsk_placeholder_key_for_initialization"
-llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.0, api_key=SecretStr(_api_key))
+
+def get_financial_llm(model_name: str = "llama-3.3-70b-versatile") -> ChatGroq:
+    """Get ChatGroq LLM instance reading GROQ_API_KEY dynamically at runtime."""
+    raw_key = os.getenv("GROQ_API_KEY") or "gsk_placeholder_key_for_initialization"
+    return ChatGroq(model=model_name, temperature=0.0, api_key=SecretStr(raw_key))
+
+
+class DynamicFinancialLLM:
+    """Dynamic LLM proxy reading GROQ_API_KEY dynamically with multi-key rotation and 429 rate limit fallback."""
+
+    def invoke(self, messages: Any, **kwargs: Any) -> Any:
+        return invoke_groq_with_key_rotation(messages)
+
+
+llm = DynamicFinancialLLM()
+
 
 FINANCIAL_SYSTEM_PROMPT = """You are an expert financial fraud audit agent specialized in transactional behavior anomaly detection.
 Your task is to analyze the details of a pending bank transfer against the customer's historical 90-day transaction patterns and any active, user-associated case context (which may include live call transcripts or phishing screenshot OCR text).
@@ -116,17 +130,32 @@ def financial_worker_node(state: GraphState) -> dict[str, Any]:
     cross-references associated_case_context for account matches.
     """
     payload = state.get("trigger_payload") or {}
-    pending_tx = payload.get("transaction") or payload
+    tx_data = payload.get("transaction") if isinstance(payload.get("transaction"), dict) else payload
 
-    sender_account = str(pending_tx.get("sender_account", ""))
-    recipient_account = str(pending_tx.get("recipient_account", ""))
+    # Build clean pending_tx dict with fallback to top-level payload keys
+    pending_tx: dict[str, Any] = {
+        "amount": tx_data.get("amount") or payload.get("amount", 0.0),
+        "sender_account": str(tx_data.get("sender_account") or payload.get("sender_account", "")),
+        "recipient_account": str(tx_data.get("recipient_account") or payload.get("recipient_account", "")),
+        "currency": str(tx_data.get("currency") or payload.get("currency", "MYR")),
+        "description": str(tx_data.get("description") or payload.get("description", "")),
+        "initiated_at": str(tx_data.get("initiated_at") or payload.get("initiated_at", "")),
+    }
+
+    sender_account = pending_tx["sender_account"]
+    recipient_account = pending_tx["recipient_account"]
     case_context = state.get("associated_case_context")
 
     # Fetch history baseline
     history: dict[str, Any] = {"avg_amount": 200.0, "known_recipients": []}
+    current_tx_id = tx_data.get("transaction_id") or payload.get("transaction_id")
     if sender_account:
         try:
-            raw_hist = fetch_user_transaction_history(sender_account)
+            raw_hist = fetch_user_transaction_history(
+                sender_account,
+                current_tx_id=current_tx_id,
+                current_recipient_account=recipient_account,
+            )
             if inspect.isawaitable(raw_hist):
                 history = {"avg_amount": 200.0, "known_recipients": []}
             elif isinstance(raw_hist, dict):
@@ -137,7 +166,7 @@ def financial_worker_node(state: GraphState) -> dict[str, Any]:
     # Baseline rule-based assessment
     finding = _rule_based_financial_analysis(pending_tx, history, case_context)
 
-    # Invoke LLM if available
+    # Invoke LLM dynamically with current GROQ_API_KEY
     try:
         prompt_text = build_financial_prompt(pending_tx, history, case_context)
         messages = [
@@ -145,13 +174,16 @@ def financial_worker_node(state: GraphState) -> dict[str, Any]:
             HumanMessage(content=prompt_text),
         ]
         llm_response = llm.invoke(messages)
-        content = str(llm_response.content).strip()
-
-        if content.startswith("{") and content.endswith("}"):
-            parsed = json.loads(content)
+        parsed = extract_json_object(llm_response.content if hasattr(llm_response, "content") else llm_response)
+        if isinstance(parsed, dict):
             score = int(parsed.get("score", finding.score))
             confidence = float(parsed.get("confidence", finding.confidence))
             evidence = list(parsed.get("evidence", finding.evidence))
+            if not evidence:
+                if score == 0:
+                    evidence = ["Transaction amount and recipient account align with normal banking patterns."]
+                else:
+                    evidence = [f"Financial transaction risk evaluated with score {score}/100."]
             finding = WorkerFinding(
                 worker="financial",
                 score=score,

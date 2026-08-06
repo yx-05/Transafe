@@ -287,6 +287,40 @@ CREATE INDEX idx_call_transcripts_case_id ON public.call_transcripts (case_id);
 
 ---
 
+### Table: `public.user_biometrics`
+
+Stores user biometric enrollment status (macOS TouchID/Android Passkeys, 128-float camera facial baseline embeddings, and SHA-256 hashed 4-digit security PIN).
+
+```sql
+CREATE TABLE public.user_biometrics (
+    user_id                TEXT PRIMARY KEY,
+    fingerprint_registered BOOLEAN DEFAULT FALSE,
+    face_enrolled          BOOLEAN DEFAULT FALSE,
+    face_embedding         JSONB,
+    passkey_credential_id  TEXT,
+    security_pin_hash      TEXT,
+    updated_at             TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+---
+
+### Table: `public.beneficiaries`
+
+Clean core-banking beneficiary directory storing basic account identity (account number, beneficiary name, and bank name). Risk intelligence and scam categories are decoupled and dynamically retrieved via RAG vector search in `public.fraud_memory`.
+
+```sql
+CREATE TABLE public.beneficiaries (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_number   TEXT NOT NULL UNIQUE,
+    beneficiary_name TEXT NOT NULL,
+    bank_name        TEXT NOT NULL,
+    created_at       TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+---
+
 ## 4. Supabase pgvector — Fraud Memory Table
 
 ### Table: `public.fraud_memory`

@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from dotenv import load_dotenv
+import bcrypt
 from faker import Faker
 
 # Add backend directory to sys.path
@@ -99,6 +100,14 @@ DEMO_FRAUD_MEMORIES = [
     },
 ]
 
+# Default demo PIN hash for '123456'
+DEMO_PIN_HASH = bcrypt.hashpw(b"123456", bcrypt.gensalt()).decode("utf-8")
+
+# Fixed demo account for frontend sign-in page default
+DEMO_ACCOUNT_NUMBER = "6373-5093-3430-8430"
+DEMO_USER_ID = "619ebd02-82fc-4a13-81f6-ff575c20278d"
+DEMO_USER_NAME = "John Doe"
+
 
 def generate_account_number() -> str:
     """Generate a fake Malaysian bank account number format XXXX-XXXX-XXXX-XXXX."""
@@ -110,6 +119,26 @@ def generate_mock_data() -> dict[str, Any]:
     users: list[dict[str, Any]] = []
     accounts: list[dict[str, Any]] = []
     transactions: list[dict[str, Any]] = []
+
+    # Fixed demo user (matches frontend sign-in default)
+    demo_user = {
+        "id": DEMO_USER_ID,
+        "display_name": DEMO_USER_NAME,
+        "risk_profile": "normal",
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+    users.append(demo_user)
+
+    demo_account = {
+        "id": str(uuid4()),
+        "account_number": DEMO_ACCOUNT_NUMBER,
+        "user_id": DEMO_USER_ID,
+        "account_type": "SAVINGS",
+        "balance_myr": 24850.75,
+        "status": "active",
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+    accounts.append(demo_account)
 
     # 1. Generate 10 Users
     for i in range(10):
@@ -234,21 +263,46 @@ def seed_db() -> None:
     # Insert Transactions
     print(f"Inserting {len(mock_data['transactions'])} transactions...")
     client.table("transactions").upsert(
-        mock_data["transactions"]
+        mock_data["transactions"], ignore_duplicates=True
     ).execute()
 
     # Insert Fraud Memories
     print(f"Inserting {len(mock_data['fraud_memories'])} fraud memories...")
-    for entry in mock_data["fraud_memories"]:
+    for mem in mock_data["fraud_memories"]:
         try:
             add_fraud_memory(
                 case_id=None,
-                fraud_type=entry["fraud_type"],
-                content=entry["content"],
-                metadata=entry["metadata"],
+                fraud_type=mem["fraud_type"],
+                content=mem["content"],
+                metadata=mem["metadata"],
             )
-        except Exception as e:
-            print(f"Warning: Failed to add vector memory: {e}")
+        except Exception as err:
+            print(f"Skipped existing or failed fraud memory insert: {err}")
+
+    # Insert Baseline Telemetry Events
+    print("Inserting baseline telemetry events...")
+    try:
+        baseline_telemetry = [
+            {
+                "user_id": "usr-123",
+                "session_id": "sess-baseline-1",
+                "device_id": "device_web_001",
+                "event_type": "KEYSTROKE",
+                "event_value": "120",
+                "app_version": "1.0.0",
+            },
+            {
+                "user_id": "usr-123",
+                "session_id": "sess-baseline-1",
+                "device_id": "device_web_001",
+                "event_type": "KEYSTROKE",
+                "event_value": "115",
+                "app_version": "1.0.0",
+            },
+        ]
+        client.table("telemetry_events").insert(baseline_telemetry).execute()
+    except Exception as err:
+        print(f"Skipped telemetry_events insert: {err}")
 
     print("Seeding completed successfully.")
 

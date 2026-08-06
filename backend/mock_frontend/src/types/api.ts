@@ -37,6 +37,7 @@ export interface TransactionPayload {
   transaction_id: string;
   sender_account: string;
   recipient_account: string;
+  recipient_name?: string;
   amount: number;
   currency: string;
   description: string;
@@ -48,6 +49,9 @@ export interface TransactionTriggerRequest {
   session_id: string;
   transaction: TransactionPayload;
   associated_case_id?: string;
+  session_metrics?: Record<string, any>;
+  behavioral_biometrics?: Record<string, any>;
+  browser_network_fingerprint?: Record<string, any>;
 }
 
 export interface CallPayload {
@@ -55,6 +59,9 @@ export interface CallPayload {
   caller_name?: string;
   call_mode: CallMode;
   call_channel: CallChannel;
+  received_at?: string;
+  stt_engine?: string;
+  auto_autotalk_on_unknown?: boolean;
 }
 
 export interface CallTriggerRequest {
@@ -91,6 +98,8 @@ export interface BiometricResultRequest {
   session_id: string;
   transaction_id: string;
   biometric_result: 'PASSED' | 'FAILED' | 'DECLINED';
+  method?: string;
+  attempted_at?: string;
 }
 
 // ---------------- RESPONSE DATA SCHEMAS ----------------
@@ -203,17 +212,58 @@ export interface WsSessionMessage {
 }
 
 export interface WsCallEventMessage {
-  type: 'pre_check' | 'transcript' | 'highlight' | 'takeover' | 'mode_change' | 'ended';
-  speaker?: 'CALLER' | 'VICTIM' | 'TRANSAFE_AI';
+  type: 'pre_check' | 'pre_check_result' | 'transcript' | 'transcript_interim' | 'highlight' | 'suspicion_update' | 'deep_analysis' | 'takeover' | 'mode_change' | 'talking' | 'call_ended' | 'ended' | 'stt_status';
+  speaker?: 'CALLER' | 'VICTIM' | 'TRANSAFE_AI' | 'SCAMMER' | 'CUSTOMER';
   text?: string;
+  is_final?: boolean;
+  status?: string;
+  suspicion_score?: number;
+  risk_tier?: 'LOW' | 'MEDIUM' | 'HIGH';
+  utterance_risk_score?: number;
+  trigger_escalation?: boolean;
+  escalation_reason?: string;
+  evidence?: string[];
+  reason?: string;
+  score?: number;
+  confidence?: number;
+  extracted_entities?: {
+    phone_numbers?: string[];
+    urls?: string[];
+    bank_accounts?: string[];
+  };
+  research?: {
+    queried?: boolean;
+    decision?: string;
+    reasoning?: string;
+    queries?: string[];
+    web_hits?: Array<{
+      title?: string;
+      url?: string;
+    }>;
+  };
+  blacklisted?: boolean;
+  blacklist_case_count?: number;
+  spoofed_prefix?: boolean;
+  initial_risk?: 'LOW' | 'MEDIUM' | 'HIGH';
+  warning_text?: string;
+  warning_text_ms?: string;
   highlighted_spans?: Array<{
     phrase: string;
     risk_level: string;
     reason: string;
+    tag?: string;
+    start?: number;
+    end?: number;
+    text?: string;
+    utterance_risk_score?: number;
   }>;
   call_mode?: CallMode;
   warning?: string;
   pre_check?: CallPreCheck;
+  tts_id?: string;
+  action?: 'continue' | 'hangup';
+  signal_detected?: boolean;
+  next_aq?: string;
 }
 
 // ---------------- ADMIN ENDPOINTS ----------------

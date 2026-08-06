@@ -88,8 +88,8 @@ export const CaseListCard: React.FC<CaseListCardProps> = ({ config, onSelectCase
                 <td colSpan={8} className="text-center">No fraud cases matching filters.</td>
               </tr>
             ) : (
-              cases.map((item) => (
-                <tr key={item.case_id}>
+              cases.map((item, idx) => (
+                <tr key={`${item.case_id}-${idx}`}>
                   <td><code>{item.case_id}</code></td>
                   <td><span className="type-badge">{item.trigger_type}</span></td>
                   <td><code>{item.user_id}</code></td>

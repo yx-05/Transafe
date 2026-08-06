@@ -1,135 +1,168 @@
 """Phone Worker Agent for TranSafe Multi-Agent pipeline."""
 
 import inspect
+import json
 import logging
 import os
 from typing import Any
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 from pydantic import SecretStr
 
-from src.agents.prompts import get_anchor_questions, get_phone_dialogue_guide
+from src.agents.llm import extract_json_object, invoke_groq_with_key_rotation
+from src.agents.prompts import (
+    AUTOTALK_SYSTEM_PROMPT,
+    build_autotalk_response_prompt,
+    build_phone_highlighter_prompt,
+    get_anchor_questions,
+    get_phone_dialogue_guide,
+)
 from src.agents.state import GraphState, WorkerFinding
-from src.db.vector_store import check_blacklist
+from src.db.vector_store import check_blacklist, search_fraud_memory
 
 logger = logging.getLogger(__name__)
 
-# Default LLM for phone worker reasoning
-_api_key = os.getenv("GROQ_API_KEY") or "gsk_placeholder_key_for_initialization"
-llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.0, api_key=SecretStr(_api_key))
+# Agent's spoken voice for AUTO_TALK replies (edge-tts, MP3 delivered via REST)
+AUTOTALK_VOICE = "ms-MY-YasminNeural"
+
+
+def get_phone_llm(model_name: str = "llama-3.3-70b-versatile") -> ChatGroq:
+    """Get ChatGroq LLM instance reading GROQ_API_KEY dynamically at runtime."""
+    raw_key = os.getenv("GROQ_API_KEY") or "gsk_placeholder_key_for_initialization"
+    return ChatGroq(model=model_name, temperature=0.0, api_key=SecretStr(raw_key))
+
+
+class DynamicPhoneLLM:
+    """Dynamic LLM proxy reading GROQ_API_KEY dynamically with multi-key rotation and fallback."""
+
+    def invoke(self, messages: Any, **kwargs: Any) -> Any:
+        return invoke_groq_with_key_rotation(messages)
+
+
+llm = DynamicPhoneLLM()
+
 
 HIGH_RISK_PHRASES = [
+    # Generic English coercion / fund-transfer indicators
+    "transfer", "transfer money", "transfer the money", "transfer to me",
+    "send me money", "send money", "to my account", "into my account",
+    "pay me", "wire transfer", "bank transfer", "money now", "give me money",
+    "give me the money", "all your money", "your savings", "withdraw",
+    "bitcoin", "crypto", "gift card", "western union",
+    # Malaysian / legacy indicators
     "safe account", "akaun selamat",
     "money laundering", "pengubahan wang haram",
     "face arrest", "akan ditangkap",
-    "otp", "one time password",
+    "otp", "one time password", 
+    "bank negara malaysia", "pdrm", "lhdn",
     "transfer immediately", "pindah segera",
-    "bank negara", "pdrm", "jabatan kastam",
-    "your account suspended", "akaun anda digantung",
+    "jabatan kastam", "your account suspended", "akaun anda digantung",
     "investment guarantee", "pulangan dijamin",
 ]
 
-SPOOFED_PREFIXES = ["1300", "1800", "03-2612", "03-2170"]
 
-PHONE_HIGHLIGHTER_SYSTEM_PROMPT = """You are an expert scam call analyst. Analyze the transcribed utterance from a live call and output a risk highlights JSON object.
-Identify phrases indicating:
-1. false_accusation: Caller accusing the victim of crime (e.g. money laundering, tax evasion).
-2. coercion_threat: Threatening immediate arrest, police visits, or blacklisting.
-3. fund_transfer_request: Demanding transfer of money to a "safe account" or "audit account".
-4. credential_harvesting: Demanding passwords, OTPs, or credit card numbers.
-5. impersonation: Pretending to represent government bodies (PDRM, Bank Negara, Customs) or commercial banks.
-
-Respond in strict JSON format:
-{
-  "spans": [
-    {
-      "start": 0,
-      "end": 20,
-      "text": "exact text span",
-      "risk_level": "HIGH",
-      "tag": "coercion_threat"
-    }
-  ],
-  "utterance_risk_score": 90
-}"""
+FILLER_TOKENS = {
+    "okay", "ok", "thanks", "thank", "thank you", "yeah", "yep", "yes", "no",
+    "uh", "uhh", "um", "hmm", "ah", "sure", "alright", "right", "got it",
+    "understood", "mhm", "huh", "bye", "hello", "hi", "please", "thankyou",
+}
 
 
-def _pre_check_caller_number(caller_number: str) -> dict[str, Any]:
-    """Perform pre-check against vector store blacklist and known spoofed bank prefixes."""
-    hits: list[dict[str, Any]] = []
-    if caller_number:
-        try:
-            raw_hits = check_blacklist(phone=caller_number)
-            if inspect.isawaitable(raw_hits):
-                hits = []
-            elif isinstance(raw_hits, list):
-                hits = raw_hits
-        except Exception as err:  # noqa: BLE001
-            logger.warning(f"Error checking phone blacklist: {err}")
-
-    spoofed = any(caller_number.startswith(p) for p in SPOOFED_PREFIXES) if caller_number else False
-
-    return {
-        "blacklisted": len(hits) > 0,
-        "blacklist_cases": hits,
-        "spoofed_prefix": spoofed,
-        "initial_risk": "HIGH" if (hits or spoofed) else "UNKNOWN",
-    }
+def _is_filler_utterance(raw_text: str) -> bool:
+    """True for short/backchannel utterances that don't warrant an LLM call."""
+    text = raw_text.strip()
+    if not text:
+        return True
+    if len(text) <= 20:
+        return True
+    words = [w.strip(".,!?;:'\"()") for w in text.split()]
+    meaningful = [w for w in words if w.lower() not in FILLER_TOKENS]
+    return len(meaningful) == 0
 
 
-def _analyze_listen_mode(
-    transcript: list[dict[str, Any]], caller_number: str, pre_check: dict[str, Any]
+def _run_listen_mode(
+    transcript: list[dict[str, Any]],
+    caller_number: str,
+    pre_check: dict[str, Any],
+    llm_enrich: bool = True,
 ) -> tuple[WorkerFinding, list[dict[str, Any]]]:
-    """Process Listen Mode real-time utterance highlighter."""
-    evidence: list[str] = []
-    score = 15
-    confidence = 0.90
+    """Process Listen Mode real-time utterance highlighting."""
     highlight_events: list[dict[str, Any]] = []
+    score = 10
+    confidence = 0.88
+    evidence: list[str] = []
 
     if pre_check.get("blacklisted"):
         score += 50
         evidence.append(f"Caller number '{caller_number}' is blacklisted in internal scam database")
 
-    if pre_check.get("spoofed_prefix"):
-        score += 30
-        evidence.append(f"Caller number '{caller_number}' matches known spoofed bank hotline prefix")
-
-    high_risk_count = 0
+    # Scan transcript for high risk phrases
     for utt in transcript:
-        text = str(utt.get("text", ""))
-        lower_text = text.lower()
+        raw_text = str(utt.get("text") or utt.get("utterance", ""))
         speaker = str(utt.get("speaker", "CALLER"))
+        lower_text = raw_text.lower()
 
         matched_phrases = [p for p in HIGH_RISK_PHRASES if p in lower_text]
         if matched_phrases:
-            high_risk_count += len(matched_phrases)
-            spans = []
+            score += len(matched_phrases) * 30
             for phrase in matched_phrases:
-                start_idx = lower_text.find(phrase)
-                end_idx = start_idx + len(phrase)
-                spans.append({
-                    "start": start_idx,
-                    "end": end_idx,
-                    "text": text[start_idx:end_idx],
+                evidence.append(f"Spoken danger phrase detected: '{phrase}' by {speaker}")
+                highlight_events.append({
+                    "utterance_id": str(utt.get("utterance_id", f"utt-{len(highlight_events)+1}")),
+                    "speaker": speaker,
+                    "phrase": phrase,
                     "risk_level": "HIGH",
+                    "reason": f"Coercion/scam indicator phrase '{phrase}' spoken by {speaker}",
                     "tag": "fund_transfer_request" if "transfer" in phrase or "account" in phrase else "coercion_threat",
+                    "utterance_risk_score": 90,
                 })
 
-            highlight_events.append({
-                "utterance_id": str(utt.get("utterance_id", f"utt-{len(highlight_events)+1}")),
-                "speaker": speaker,
-                "text": text,
-                "spans": spans,
-                "utterance_risk_score": 90,
-            })
-
-    if high_risk_count > 0:
-        score += min(high_risk_count * 30, 75)
-        evidence.append(f"Listen Mode: Detected {high_risk_count} high-risk scam phrase indicator(s)")
+        # LLM enrichment pass: span-level risk scoring on every utterance
+        # (rules already produced instant highlights; this adds context spans)
+        if llm_enrich and not _is_filler_utterance(raw_text):
+            try:
+                prompt_text = build_phone_highlighter_prompt(raw_text)
+                messages = [
+                    SystemMessage(content="You are a scam call analyst."),
+                    HumanMessage(content=prompt_text),
+                ]
+                _llm_resp = llm.invoke(messages)
+                _llm_text = _llm_resp.content if hasattr(_llm_resp, "content") else _llm_resp
+                parsed = extract_json_object(_llm_text) if isinstance(_llm_text, str) else None
+                if isinstance(parsed, dict):
+                    for sp in parsed.get("spans") or []:
+                        if not isinstance(sp, dict):
+                            continue
+                        phrase = str(sp.get("text") or "").strip()
+                        if not phrase or len(phrase) < 2:
+                            continue
+                        # Skip spans already covered by rule hits (exact or narrower)
+                        ph_lower = phrase.lower()
+                        if any(
+                            ph_lower == p.lower() or ph_lower in p.lower()
+                            for p in matched_phrases
+                        ):
+                            continue
+                        highlight_events.append({
+                            "utterance_id": str(utt.get("utterance_id", f"utt-{len(highlight_events)+1}")),
+                            "speaker": speaker,
+                            "phrase": phrase,
+                            "risk_level": str(sp.get("risk_level", "HIGH")).upper(),
+                            "reason": f"LLM span analysis flagged '{phrase}' spoken by {speaker}",
+                            "tag": str(sp.get("tag", "coercion_threat")),
+                            "utterance_risk_score": int(sp.get("utterance_risk_score", 90) or 90),
+                        })
+                        evidence.append(f"LLM highlighter flagged '{phrase}' spoken by {speaker}")
+                    llm_utt_score = parsed.get("utterance_risk_score")
+                    if isinstance(llm_utt_score, (int, float)):
+                        score = max(score, int(llm_utt_score))
+            except Exception as err:  # noqa: BLE001
+                logger.debug(f"Phone LLM highlighter skipped: {err}")
 
     score = min(score, 100)
     if not evidence:
-        evidence.append("Listen Mode: Call speech pattern within normal parameters")
+        evidence.append("Listen Mode: Call speech transcribed; no immediate high-risk coercion phrases detected")
 
     finding = WorkerFinding(
         worker="phone",
@@ -143,7 +176,14 @@ def _analyze_listen_mode(
 def _analyze_autotalk_mode(
     transcript: list[dict[str, Any]], caller_number: str, pre_check: dict[str, Any]
 ) -> WorkerFinding:
-    """Process Auto-Talk Mode dialogue state machine analysis."""
+    """Process Auto-Talk Mode dialogue state machine analysis.
+
+    Evaluates the transcript against the anchor-question skill schedule:
+    each anchor question carries a weight (AQ-1 identity, AQ-2 call-back
+    test, AQ-3 transfer probe, AQ-4 urgent-action challenge). Confirmed
+    scam indicators per AQ raise suspicion; resistance to the AQ-2 hang-up
+    test and AQ-4 urgency pressure are penalized hardest.
+    """
     evidence: list[str] = []
     score = 20
     confidence = 0.92
@@ -152,28 +192,55 @@ def _analyze_autotalk_mode(
         score += 50
         evidence.append(f"Caller number '{caller_number}' is blacklisted in internal scam database")
 
-    _ = get_anchor_questions()
-    _ = get_phone_dialogue_guide()
+    # Anchor-question skill schedule: how much each confirmed indicator raises suspicion
+    aq_weights = {"AQ-1": 15, "AQ-2": 20, "AQ-3": 30, "AQ-4": 30}
+    aq_tokens: dict[str, tuple[list[str], str]] = {
+        "AQ-1": (
+            ["employee id", "organisation", "department", "registration number", "aq-1"],
+            "identity verification — caller failed/refused to provide verifiable ID",
+        ),
+        "AQ-2": (
+            ["hang up", "hotline", "extension number", "aq-2", "must not disconnect", "do not hang up"],
+            "call-back test — caller resisted hanging up / claimed line must stay open",
+        ),
+        "AQ-3": (
+            ["transfer", "safe account", "akaun selamat", "secure account", "card password", "otp", "aq-3"],
+            "financial transfer probe — caller confirmed/deflected fund movement",
+        ),
+        "AQ-4": (
+            ["immediate", "arrest", "akan ditangkap", "account freeze", "penalty", "family", "aq-4", "right now", "asap"],
+            "urgent-action challenge — caller pressured for immediate execution",
+        ),
+    }
 
-    # Evaluates transcript against anchor questions
     full_text = " ".join([str(u.get("text", "")) for u in transcript]).lower()
 
-    if "employee id" in full_text or "organisation" in full_text or "aq-1" in full_text:
-        evidence.append("Auto-Talk Mode: Asked AQ-1 (identity verification) — caller failed/refused ID")
-        score += 25
+    # Resistance phrases (typically spoken AFTER the agent asks the hang-up test)
+    resistance_tokens = [
+        "do not hang up", "don't hang up", "must not disconnect", "line is secure",
+        "you will be arrested", "immediate arrest", "akan ditangkap",
+    ]
 
-    if "hang up" in full_text or "hotline" in full_text or "aq-2" in full_text:
-        evidence.append("Auto-Talk Mode: Asked AQ-2 (call-back test) — caller resisted hanging up")
-        score += 30
+    asked_any = False
+    for aq_id, (tokens, goal) in aq_tokens.items():
+        if any(tok in full_text for tok in tokens):
+            asked_any = True
+            if any(r in full_text for r in resistance_tokens):
+                evidence.append(
+                    f"Auto-Talk Mode: {aq_id} ({goal}) + caller resisted call termination — "
+                    f"coercive pressure detected (+{aq_weights[aq_id] + 20})"
+                )
+                score += aq_weights[aq_id] + 20
+            else:
+                evidence.append(
+                    f"Auto-Talk Mode: {aq_id} ({goal}) — caller response evaluated (+{aq_weights[aq_id]})"
+                )
+                score += aq_weights[aq_id]
 
-    if "transfer" in full_text or "safe account" in full_text or "aq-3" in full_text:
-        evidence.append("Auto-Talk Mode: Asked AQ-3 (financial request probe) — confirmed transfer intent")
-        score += 30
+    if not asked_any:
+        evidence.append("Auto-Talk Mode: Conducted verification dialogue; no anchor-question signal matched yet")
 
     score = min(score, 100)
-    if not evidence:
-        evidence.append("Auto-Talk Mode: Conducted verification dialogue; caller responses evaluated")
-
     return WorkerFinding(
         worker="phone",
         score=score,
@@ -182,41 +249,172 @@ def _analyze_autotalk_mode(
     )
 
 
-def phone_worker_node(state: GraphState) -> dict[str, Any]:
+def _fallback_autotalk_reply(
+    transcript: list[dict[str, Any]],
+    suspicion: int,
+    anchor_questions: list[dict[str, Any]],
+    aq_progress: dict[str, Any],
+) -> dict[str, Any]:
+    """Deterministic fallback when the LLM responder fails.
+
+    Picks the first anchor question from the skill schedule that has not yet
+    been asked; once the full schedule is exhausted (or suspicion is HIGH)
+    it asks a stall line from the dialogue guide instead.
+    """
+    asked = set(aq_progress.get("asked") or [])
+    for aq in anchor_questions:
+        aq_id = str(aq.get("id", ""))
+        if aq_id.startswith("AQ-") and aq_id not in asked:
+            template = str(aq.get("question_template") or aq.get("question_example") or "")
+            if not template:
+                continue
+            return {
+                "reply": template,
+                "next_aq": aq_id,
+                "signal_detected": False,
+                "suspicion_delta": 0,
+                "action": "continue",
+                "reasoning": f"Fallback: advancing to {aq_id} from the anchor-question schedule",
+            }
+
+    # Full schedule asked → stall, or hang up if suspicion is already confirmed HIGH
+    if suspicion >= 70:
+        return {
+            "reply": "I'm ending this call, bye.",
+            "next_aq": "NONE",
+            "signal_detected": True,
+            "suspicion_delta": 0,
+            "action": "hangup",
+            "reasoning": "Fallback: suspicion already HIGH and schedule exhausted — hang up",
+        }
+    return {
+        "reply": "Okay, I understand. Please give me a moment — I need to note this down carefully.",
+        "next_aq": "NONE",
+        "signal_detected": False,
+        "suspicion_delta": 0,
+        "action": "continue",
+        "reasoning": "Fallback: stalling per dialogue guide while schedule is exhausted",
+    }
+
+
+def _run_autotalk_responder(
+    transcript: list[dict[str, Any]],
+    caller_number: str,
+    pre_check: dict[str, Any],
+    suspicion: int,
+    aq_progress: dict[str, Any],
+) -> dict[str, Any]:
+    """Generate the AUTO_TALK agent's next reply, grounded in the skills.
+
+    Consumes the anchor-question schedule and phone dialogue guide skill
+    files (via prompts.build_autotalk_response_prompt), runs the LLM, and
+    parses the strict JSON response. Falls back to the deterministic
+    AQ-schedule walk when the LLM is unavailable or returns garbage.
+
+    Returns:
+        Dict with keys: reply, next_aq, signal_detected, suspicion_delta,
+        action ("continue" | "hangup"), reasoning.
+    """
+    try:
+        anchor_questions = get_anchor_questions()
+        dialogue_guide = get_phone_dialogue_guide()
+    except Exception as err:  # noqa: BLE001
+        logger.warning(f"AUTO_TALK skills unavailable, using fallback reply: {err}")
+        anchor_questions = []
+        dialogue_guide = ""
+
+    prompt_text = build_autotalk_response_prompt(
+        transcript, anchor_questions, dialogue_guide, suspicion, aq_progress
+    )
+    messages = [
+        SystemMessage(content=AUTOTALK_SYSTEM_PROMPT),
+        HumanMessage(content=prompt_text),
+    ]
+
+    try:
+        resp = llm.invoke(messages)
+        raw_text = resp.content if hasattr(resp, "content") else resp
+        parsed = extract_json_object(str(raw_text)) if isinstance(raw_text, str) else None
+        if isinstance(parsed, dict) and str(parsed.get("reply", "")).strip():
+            reply = str(parsed.get("reply", "")).strip()
+            next_aq = str(parsed.get("next_aq") or "NONE")
+            action = str(parsed.get("action") or "continue")
+            if action not in ("continue", "hangup"):
+                action = "continue"
+            return {
+                "reply": reply,
+                "next_aq": next_aq,
+                "signal_detected": bool(parsed.get("signal_detected") or False),
+                "suspicion_delta": max(0, min(50, int(parsed.get("suspicion_delta") or 0))),
+                "action": action,
+                "reasoning": str(parsed.get("reasoning") or "LLM judgement"),
+            }
+        logger.warning(f"AUTO_TALK LLM returned unparsable reply: {raw_text!r}")
+    except Exception as err:  # noqa: BLE001
+        logger.warning(f"AUTO_TALK LLM invoke failed: {err}")
+
+    return _fallback_autotalk_reply(transcript, suspicion, anchor_questions, aq_progress)
+
+
+def phone_worker_node(
+    state: GraphState,
+    pre_check: dict[str, Any] | None = None,
+    llm_enrich: bool = True,
+) -> dict[str, Any]:
     """Pure state transformation node for Phone Worker.
 
     Supports Listen Mode utterance highlighting and Auto-Talk Mode
-    conversation state machine.
+    verification dialogue state machine evaluation.
+
+    Args:
+        state: The LangGraph shared state.
+        pre_check: Optional pre-computed call pre-check (blacklist + spoofed
+            prefix). When provided, skips the internal blacklist DB query.
     """
-    call_mode = state.get("call_mode") or "LISTEN"
     payload = state.get("trigger_payload") or {}
+    call_payload = payload.get("call") or payload
 
-    phone_session = state.get("phone_session") or payload.get("phone_session") or {}
-    caller_number = str(phone_session.get("caller_number") or payload.get("caller_number", ""))
-    transcript = phone_session.get("transcript") or payload.get("transcript") or []
+    caller_number = str(call_payload.get("caller_number", ""))
+    call_mode = str(state.get("call_mode") or call_payload.get("call_mode", "LISTEN")).upper()
+    transcript: list[dict[str, Any]] = call_payload.get("transcript") or []
 
-    # Pre-check caller number
-    pre_check = _pre_check_caller_number(caller_number)
+    # Use provided pre-check when available, else query blacklist DB
+    if pre_check is not None:
+        pre_check = dict(pre_check)
+    else:
+        pre_check = {"blacklisted": False}
+        if caller_number:
+            try:
+                hits = check_blacklist(phone=caller_number)
+                if inspect.isawaitable(hits):
+                    hits = []
+                if hits:
+                    pre_check["blacklisted"] = True
+                    pre_check["warning"] = f"Caller number {caller_number} reported in fraud database"
+                    pre_check["blacklist_cases"] = len(hits)
+            except Exception as err:  # noqa: BLE001
+                logger.warning(f"Failed to query phone blacklist: {err}")
 
     if call_mode == "AUTO_TALK":
         finding = _analyze_autotalk_mode(transcript, caller_number, pre_check)
-        highlight_events = phone_session.get("highlight_events", [])
-    else:
-        finding, highlight_events = _analyze_listen_mode(transcript, caller_number, pre_check)
+        return {
+            "phone_finding": finding.model_dump(),
+            "phone_session": {
+                "caller_number": caller_number,
+                "call_mode": call_mode,
+                "pre_check": pre_check,
+                "highlights": [],
+            },
+        }
 
-    updated_phone_session = {
-        "call_session_id": str(phone_session.get("call_session_id", "session-default")),
-        "call_mode": call_mode,
-        "caller_number": caller_number,
-        "transcript": transcript,
-        "highlight_events": highlight_events,
-        "suspicion_score": finding.score,
-        "anchor_questions_asked": phone_session.get("anchor_questions_asked", ["AQ-1", "AQ-2"]),
-        "anchor_questions_remaining": phone_session.get("anchor_questions_remaining", ["AQ-3", "AQ-4"]),
-        "call_ended": bool(phone_session.get("call_ended", False)),
-    }
-
+    finding, highlights = _run_listen_mode(transcript, caller_number, pre_check, llm_enrich=llm_enrich)
     return {
         "phone_finding": finding.model_dump(),
-        "phone_session": updated_phone_session,
+        "phone_session": {
+            "caller_number": caller_number,
+            "call_mode": call_mode,
+            "pre_check": pre_check,
+            "highlights": highlights,
+            "highlight_events": highlights,
+        },
     }

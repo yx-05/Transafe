@@ -20,6 +20,15 @@ class ResponseEnvelope(BaseModel, Generic[DataT]):  # noqa: UP046
 
 
 # Telemetry Trigger Schemas
+class TelemetryIngestRequest(BaseModel):
+    user_id: str
+    session_id: str
+    device_id: str = "unknown_device"
+    event_type: str
+    event_value: str | None = None
+    app_version: str = "1.0.0"
+
+
 class TelemetryEventItem(BaseModel):
     event_type: str
     event_value: str | None = None
@@ -81,6 +90,9 @@ class TransactionTriggerRequest(BaseModel):
     session_id: str
     associated_case_id: str | None = None
     transaction: TransactionDetail
+    session_metrics: dict[str, Any] | None = None
+    behavioral_biometrics: dict[str, Any] | None = None
+    browser_network_fingerprint: dict[str, Any] | None = None
 
 
 class TransactionTriggerData(BaseModel):
@@ -95,10 +107,12 @@ class CallDetail(BaseModel):
     caller_number: str
     caller_name: str | None = "Unknown"
     call_direction: str = "INCOMING"
-    received_at: str
+    received_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     is_during_banking_session: bool = True
     call_mode: str = "LISTEN"
     call_channel: str = "WEBRTC"
+    stt_engine: str = "groq"
+    auto_autotalk_on_unknown: bool = False
 
 
 class CallTriggerRequest(BaseModel):
@@ -111,6 +125,7 @@ class CallTriggerRequest(BaseModel):
 class CallPreCheck(BaseModel):
     blacklisted: bool = False
     blacklist_cases: int = 0
+    spoofed_prefix: bool = False
     initial_risk: str = "LOW"
     warning: str | None = None
 
@@ -176,8 +191,8 @@ class BiometricResultRequest(BaseModel):
     session_id: str
     transaction_id: str
     biometric_result: str
-    method: str
-    attempted_at: str
+    method: str = "TOUCH_ID"
+    attempted_at: str | None = None
 
 
 class BiometricResultData(BaseModel):

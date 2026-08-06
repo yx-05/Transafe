@@ -173,10 +173,10 @@ CREATE TABLE IF NOT EXISTS public.call_transcripts (
 CREATE INDEX IF NOT EXISTS idx_call_transcripts_case_id ON public.call_transcripts (case_id);
 
 -- ── 11. TELEMETRY_EVENTS ────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS telemetry.telemetry_events (
+CREATE TABLE IF NOT EXISTS public.telemetry_events (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id         UUID NOT NULL,
-    session_id      UUID NOT NULL,
+    user_id         TEXT NOT NULL,
+    session_id      TEXT NOT NULL,
     device_id       TEXT NOT NULL,
     event_type      TEXT NOT NULL,
     event_value     TEXT,
@@ -185,7 +185,8 @@ CREATE TABLE IF NOT EXISTS telemetry.telemetry_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_telemetry_user_session
-    ON telemetry.telemetry_events (user_id, session_id, created_at DESC);
+    ON public.telemetry_events (user_id, session_id, created_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_telemetry_created_at
     ON telemetry.telemetry_events (created_at DESC);
 
@@ -260,3 +261,6 @@ BEGIN
     LIMIT match_count;
 END;
 $$;
+
+-- ── 14. AUTH: Add pin_hash to accounts ───────────────────────────
+ALTER TABLE public.accounts ADD COLUMN IF NOT EXISTS pin_hash TEXT;

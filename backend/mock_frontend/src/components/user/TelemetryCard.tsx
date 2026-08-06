@@ -16,7 +16,7 @@ export const TelemetryCard: React.FC<TelemetryCardProps> = ({
   onOpenXaiReport,
 }) => {
   const [deviceId, setDeviceId] = useState('dev-macbook-pro-2026');
-  const [avgFlightTime, setAvgFlightTime] = useState('650'); // Slow flight time simulating dictation/coercion
+  const [avgFlightTime, setAvgFlightTime] = useState('650');
   const [screenShare, setScreenShare] = useState(true);
   const [copyPaste, setCopyPaste] = useState(true);
 
@@ -34,27 +34,6 @@ export const TelemetryCard: React.FC<TelemetryCardProps> = ({
     const sessionId = `sess-tel-${Date.now()}`;
 
     try {
-      const wsClient = new SessionWebSocketClient();
-      wsClient.connect(
-        config.baseUrl,
-        sessionId,
-        (msg) => {
-          if (msg.message || msg.status) {
-            setStatusLog((prev) => [...prev, msg.message || msg.status || '']);
-          }
-          if (msg.type === 'result' && msg.data) {
-            setResult(msg.data);
-            setLoading(false);
-            wsClient.close();
-          }
-        },
-        (_err) => {
-          setStatusLog((prev) => [...prev, 'WebSocket error']);
-          setLoading(false);
-        },
-        () => {}
-      );
-
       await client.triggerTelemetry({
         user_id: userId,
         session_id: sessionId,
@@ -74,6 +53,29 @@ export const TelemetryCard: React.FC<TelemetryCardProps> = ({
           ip_location: 'Kuala Lumpur, MY',
         },
       });
+
+      const wsClient = new SessionWebSocketClient();
+      wsClient.connect(
+        config.baseUrl,
+        sessionId,
+        config.apiKey,
+        (msg) => {
+          if (msg.message || msg.status) {
+            setStatusLog((prev) => [...prev, msg.message || msg.status || '']);
+          }
+          if (msg.type === 'result' && msg.data) {
+            setResult(msg.data);
+            setLoading(false);
+            wsClient.close();
+          }
+        },
+        (err) => {
+          const errMsg = typeof err === 'string' ? err : 'WebSocket connection error';
+          setStatusLog((prev) => [...prev, `▸ Error: ${errMsg}`]);
+          setLoading(false);
+        },
+        () => {}
+      );
     } catch (err: any) {
       setStatusLog((prev) => [...prev, `Error: ${err.message}`]);
       setLoading(false);

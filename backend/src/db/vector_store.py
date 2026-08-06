@@ -125,6 +125,87 @@ def search_fraud_memory(
     return []
 
 
+def hybrid_search_fraud_memory(
+    query_text: str = "",
+    bank_account: str | None = None,
+    phone_number: str | None = None,
+    threshold: float = 0.45,
+    top_k: int = 5,
+) -> list[dict[str, Any]]:
+    """Hybrid Search combining BM25/Exact Token Filtering with Dense Semantic Vector RAG.
+
+    Step 1: BM25 Lexical / Exact Token Filter:
+            Queries public.fraud_memory for exact matches on bank_accounts array,
+            phone_numbers array, or text content tokens.
+    Step 2: Dense Vector Similarity Search:
+            Queries public.fraud_memory using nomic-embed-text 768-dim embeddings.
+    Step 3: Deduplicates & Reranks Results.
+    """
+    client = get_supabase_client()
+    exact_matches: list[dict[str, Any]] = []
+
+    # 1. BM25 / Exact Lexical Token Search
+    try:
+        if bank_account:
+            clean_acc = bank_account.strip()
+            resp = client.table("fraud_memory").select("*").contains("bank_accounts", [clean_acc]).execute()
+            if resp.data:
+                for row in resp.data:
+                    row["similarity"] = 1.0  # Instant 100% exact BM25 match
+                    row["search_method"] = "BM25_EXACT_ACCOUNT"
+                    exact_matches.append(row)
+
+        if phone_number:
+            clean_phone = phone_number.strip()
+            resp = client.table("fraud_memory").select("*").contains("phone_numbers", [clean_phone]).execute()
+            if resp.data:
+                for row in resp.data:
+                    if str(row["id"]) not in [str(e["id"]) for e in exact_matches]:
+                        row["similarity"] = 1.0
+                        row["search_method"] = "BM25_EXACT_PHONE"
+                        exact_matches.append(row)
+
+        if query_text and len(query_text.strip()) >= 3:
+            clean_q = query_text.strip()
+            resp = client.table("fraud_memory").select("*").ilike("content", f"%{clean_q}%").execute()
+            if resp.data:
+                for row in resp.data:
+                    if str(row["id"]) not in [str(e["id"]) for e in exact_matches]:
+                        row["similarity"] = 0.95
+                        row["search_method"] = "BM25_EXACT_KEYWORD"
+                        exact_matches.append(row)
+    except Exception:
+        pass
+
+    # 2. Dense Semantic Vector Search (pgvector)
+    vector_matches: list[dict[str, Any]] = []
+    if query_text:
+        try:
+            v_hits = search_fraud_memory(query_text, threshold=threshold, top_k=top_k)
+            for hit in v_hits:
+                hit["search_method"] = "DENSE_VECTOR_RAG"
+                vector_matches.append(hit)
+        except Exception:
+            pass
+
+    # 3. Merge & Deduplicate by ID and Content Text
+    seen_ids = set()
+    seen_contents = set()
+    combined: list[dict[str, Any]] = []
+
+    for item in exact_matches + vector_matches:
+        item_id = str(item.get("id", ""))
+        content_key = str(item.get("content", "")).strip()[:100]
+        if item_id not in seen_ids and content_key not in seen_contents:
+            seen_ids.add(item_id)
+            seen_contents.add(content_key)
+            combined.append(item)
+
+    # Sort descending by similarity score
+    combined.sort(key=lambda x: float(x.get("similarity", 0.0)), reverse=True)
+    return combined[:top_k]
+
+
 def check_blacklist(
     phone: str | None = None, url: str | None = None
 ) -> list[dict]:

@@ -37,6 +37,7 @@ class GraphState(TypedDict, total=False):
     action_taken: str | None
     case_id: str | None
     extracted_entities: dict[str, Any] | None
+    research: dict[str, Any] | None
     status_messages: list[str]
     associated_case_id: str | None
     associated_case_context: dict[str, Any] | None

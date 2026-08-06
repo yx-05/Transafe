@@ -45,8 +45,8 @@ export const RecentCasesCard: React.FC<RecentCasesCardProps> = ({ config, userId
         {cases.length === 0 ? (
           <p className="placeholder-text">No active user cases found in session memory.</p>
         ) : (
-          cases.map((c) => (
-            <div key={c.case_id} className="case-item-row">
+          cases.map((c, idx) => (
+            <div key={`${c.case_id}-${idx}`} className="case-item-row">
               <div className="case-main">
                 <strong>{c.case_id}</strong>
                 <span className="case-type">{c.trigger_type}</span>

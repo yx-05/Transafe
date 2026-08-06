@@ -166,6 +166,18 @@ async def unfreeze_account(
     )
 
 
+@router.post("/transactions/auto-unfreeze", status_code=status.HTTP_200_OK)
+async def trigger_auto_unfreeze() -> dict[str, Any]:
+    """Scan and automatically unfreeze any transactions whose cooling-off period has expired."""
+    from src.db.supabase import auto_unfreeze_expired_transactions
+    unfrozen_records = auto_unfreeze_expired_transactions()
+    return {
+        "success": True,
+        "unfrozen_count": len(unfrozen_records),
+        "unfrozen_transactions": unfrozen_records,
+    }
+
+
 @router.get(
     "/analytics/summary",
     response_model=ResponseEnvelope[AnalyticsSummaryData],

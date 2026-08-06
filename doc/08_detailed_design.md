@@ -466,3 +466,33 @@ pytest tests/unit/test_workers.py -v
 pytest tests/unit/test_graph.py -v
 pytest tests/unit/test_api.py -v
 ```
+
+---
+
+## 9. Recent System Upgrades & Multi-Key Pool Architecture
+
+### 9.1 Multi-Key Rotation Pool (`src/agents/llm.py`)
+```
+[User Request] ──► [Worker Node] ──► [invoke_groq_with_key_rotation]
+                                             │
+                       ┌─────────────────────┴─────────────────────┐
+                       ▼                                           ▼
+             [GROQ_API_KEY] (70b)                       [GROQ_API_KEY_1] (70b)
+             (If 429 Rate Limit)                        (If 429 Rate Limit)
+                       │                                           │
+                       ▼                                           ▼
+             [GROQ_API_KEY_2] (70b)                     [GROQ_API_KEY_3] (70b)
+                       │                                           │
+                       └─────────────────────┬─────────────────────┘
+                                             ▼ (All 70b Keys Exceeded)
+                                   [llama-3.1-8b-instant]
+```
+
+### 9.2 Tavily Search Tiered Fallback (`src/services/tavily.py`)
+1. **Tier 1 (Regulatory)**: `sc.com.my`, `bnm.gov.my`
+2. **Tier 2 (Enforcement & Community)**: `rmp.gov.my`, `forum.lowyat.net`
+3. **Tier 3 (Unconstrained Broad Search)**: Automatically triggered if entity keywords are missing from domain-restricted snippets, guaranteeing retrieval of explicit scam articles (e.g. `Bestino Group`, `JJPTR`, `Genneva`).
+4. **Slot #1 Guarantee**: Reserves Slot #1 for official Securities Commission / Bank Negara Malaysia alert notices whenever available.
+
+### 9.3 Historical Baseline Isolation (`src/db/supabase.py`)
+Filters out `current_tx_id` and `'pending'` / `'frozen_pending'` status transactions from historical 90-day baseline aggregations to prevent current pending transactions from polluting user history or masking first-time recipients.
