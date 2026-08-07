@@ -41,7 +41,7 @@ interface AuthContextType {
 const AUTH_STORAGE_KEY = 'transafe_auth_session';
 
 // ── Default backend URL ────────────────────────────────────────
-const DEFAULT_BACKEND_URL = 'http://localhost:8000';
+const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://transafe-production.up.railway.app');
 
 // ── Context ────────────────────────────────────────────────────
 const AuthContext = createContext<AuthContextType | undefined>(undefined);

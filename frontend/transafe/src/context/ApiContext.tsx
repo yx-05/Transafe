@@ -19,10 +19,13 @@ const SEED_USER_ID = '619ebd02-82fc-4a13-81f6-ff575c20278d';
 export function getInitialBaseUrl(): string {
   if (typeof window === 'undefined') return 'http://localhost:8000';
   const host = window.location.hostname || 'localhost';
+  if (host === 'localhost') {
+    return 'http://localhost:8000';
+  }
   if (/(trycloudflare\.com|loca\.lt|ngrok)/.test(window.location.host)) {
     return window.location.origin;
   }
-  return `${window.location.protocol}//${host}:8000`;
+  return import.meta.env.VITE_BACKEND_URL || 'https://transafe-production.up.railway.app';
 }
 
 export function getDefaultConfig(): BackendConfig {
