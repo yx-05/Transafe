@@ -335,32 +335,7 @@ export const CallActivePage: React.FC = () => {
     setStatusLog((prev) => [...prev, '[CALL ENGINE] Call session ended manually.']);
   };
 
-  // Empty state: trigger a direct call session so the poll picks it up as RINGING
-  const handleSimulateCall = async () => {
-    const sessionId = `sess-call-${Date.now()}`;
-    try {
-      const res = await client.triggerCall({
-        user_id: userId,
-        session_id: sessionId,
-        call: {
-          caller_number: callerNumber,
-          caller_name: callerName,
-          call_mode: 'LISTEN',
-          call_channel: 'WEBRTC',
-          received_at: new Date().toISOString(),
-          stt_engine: 'nova-3',
-        },
-      });
-      setStatusLog((prev) => [
-        ...prev,
-        `[REST API] POST /api/v1/trigger/call -> Session registered (${res.call_session_id})`,
-        `[PRE-CHECK] Blacklisted: ${res.pre_check.blacklisted ? 'YES ⚠️' : 'NO ✅'}`,
-      ]);
-      // Poll will detect RINGING and show the incoming call modal
-    } catch (err: any) {
-      setStatusLog((prev) => [...prev, `Start call failed: ${err.message}`]);
-    }
-  };
+
 
   // Highlight phrase formatter
   const renderHighlightedText = (text: string, highlights?: Array<{ phrase: string; tag: string }>) => {
@@ -682,21 +657,11 @@ export const CallActivePage: React.FC = () => {
             </p>
             <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', flexWrap: 'wrap' }}>
               <button
-                onClick={handleSimulateCall}
-                className="btn-primary"
-                style={{ padding: '14px 24px', justifyContent: 'center', backgroundColor: '#2563eb', boxShadow: 'none', display: 'inline-flex' }}
-                onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#1d4ed8'; }}
-                onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#2563eb'; }}
-              >
-                <span className="material-symbols-outlined">call</span>
-                Simulate Active Call
-              </button>
-              <button
                 onClick={() => window.open('/scammer', '_blank')}
-                className="btn-secondary"
-                style={{ padding: '14px 24px', justifyContent: 'center', backgroundColor: '#374151', color: '#fff', border: 'none', display: 'inline-flex' }}
-                onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#4b5563'; }}
-                onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#374151'; }}
+                className="btn-primary"
+                style={{ padding: '14px 24px', justifyContent: 'center', backgroundColor: '#dc2626', color: '#fff', border: 'none', display: 'inline-flex' }}
+                onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#b91c1c'; }}
+                onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#dc2626'; }}
               >
                 <span className="material-symbols-outlined">terminal</span>
                 Open Scammer Simulator
