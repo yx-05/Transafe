@@ -26,6 +26,7 @@ export const UserNavigation: React.FC = () => {
       <NavItem to="/transfer" icon="sync_alt" label="Transfer" />
       <NavItem to="/scan" icon="verified_user" label="Scan" />
       <NavItem to="/call-active" icon="real_estate_agent" label="Copilot" />
+      <NavItem to="/admin" icon="admin_panel_settings" label="Admin" />
     </nav>
   );
 };

@@ -680,16 +680,28 @@ export const CallActivePage: React.FC = () => {
             <p style={{ fontSize: '12px', color: '#9ca3af', maxWidth: '448px', margin: '0 auto 32px' }}>
               TranSafe Real-Time Safety Copilot will automatically intercept incoming phone calls, transcribe conversations, and highlight scam keyphrases.
             </p>
-            <button
-              onClick={handleSimulateCall}
-              className="btn-primary"
-              style={{ padding: '14px 24px', justifyContent: 'center', backgroundColor: '#2563eb', boxShadow: 'none', display: 'inline-flex' }}
-              onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#1d4ed8'; }}
-              onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#2563eb'; }}
-            >
-              <span className="material-symbols-outlined">call</span>
-              Simulate Active Call
-            </button>
+            <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button
+                onClick={handleSimulateCall}
+                className="btn-primary"
+                style={{ padding: '14px 24px', justifyContent: 'center', backgroundColor: '#2563eb', boxShadow: 'none', display: 'inline-flex' }}
+                onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#1d4ed8'; }}
+                onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#2563eb'; }}
+              >
+                <span className="material-symbols-outlined">call</span>
+                Simulate Active Call
+              </button>
+              <button
+                onClick={() => window.open('/scammer', '_blank')}
+                className="btn-secondary"
+                style={{ padding: '14px 24px', justifyContent: 'center', backgroundColor: '#374151', color: '#fff', border: 'none', display: 'inline-flex' }}
+                onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#4b5563'; }}
+                onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#374151'; }}
+              >
+                <span className="material-symbols-outlined">terminal</span>
+                Open Scammer Simulator
+              </button>
+            </div>
           </div>
         )}
 
