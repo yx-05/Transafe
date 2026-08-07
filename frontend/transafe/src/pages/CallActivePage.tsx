@@ -42,7 +42,7 @@ const normalizeSpeaker = (speaker?: string): 'caller' | 'ai' | 'user' => {
 export const CallActivePage: React.FC = () => {
   const { config, client, userId } = useApi();
 
-  const [callerNumber] = useState('+60161234567');
+
   const [callerName] = useState('Inspector Tan (PDRM Fake)');
   const [callMode, setCallMode] = useState<'copilot' | 'autotalk'>('copilot');
   const [currentMode, setCurrentMode] = useState<'copilot' | 'autotalk'>('copilot');
