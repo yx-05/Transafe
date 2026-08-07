@@ -3,7 +3,9 @@
 import asyncio
 import json
 import os
+import re
 import time
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -18,10 +20,15 @@ from src.agents.workers.phone import (
 from src.agents.prompts import get_anchor_questions
 from src.agents.workers.phishing import analyze_call_transcript
 from src.api.session_store import session_store
+from src.db.supabase import (
+    insert_call_transcript,
+    insert_case_entities,
+    insert_fraud_case,
+)
 from src.services.call_precheck import run_call_precheck
 from src.services.stt import transcribe_audio_chunk
 from src.services.stt_streaming import DeepgramStreamingSession
-from src.services.tts import synthesize_text_to_audio
+from src.services.tts import synthesize_agent_speech
 
 call_ws_router = APIRouter(tags=["call_websockets"])
 
@@ -36,6 +43,11 @@ call_phone_states: dict[str, dict[str, Any]] = {}
 call_pending_broadcasts: dict[str, int] = {}
 # AUTO_TALK reply task guards (one in-flight agent reply per call)
 call_autotalk_busy: set[str] = set()
+
+# Minimum seconds between AUTO_TALK agent replies. STT delivers sentence
+# fragments and the LLM reply + TTS audio plays for ~6-8s, so replies must be
+# spaced out or the agent talks over its own previous utterance.
+AUTO_TALK_REPLY_MIN_GAP = 6.0
 
 
 async def broadcast_event(call_session_id: str, event_data: dict[str, Any]) -> None:
@@ -79,11 +91,18 @@ async def handle_call_ended(call_session_id: str, ended_by_role: str) -> None:
 
 
 async def _finalize_ended_call(call_session_id: str) -> None:
-    """Run the call-end deep analysis, then tear down the in-memory call state."""
+    """Run the call-end deep analysis, persist the call as a fraud case, then tear down state."""
+    deep_event: dict[str, Any] | None = None
     try:
-        await _run_deep_transcript_analysis(call_session_id, "call_end")
+        deep_event = await _run_deep_transcript_analysis(call_session_id, "call_end")
     except Exception as err:  # noqa: BLE001
         print(f"[DEEP ANALYSIS ❌] {call_session_id} call-end: {err}")
+
+    # Persist every call (even LOW risk) as a case so the user can label it later.
+    try:
+        await _persist_call_case(call_session_id, deep_event)
+    except Exception as err:  # noqa: BLE001
+        print(f"[PERSIST CASE ❌] {call_session_id}: {err}")
 
     # Clean up audio buffers immediately
     call_audio_buffers.pop(call_session_id, None)
@@ -132,17 +151,20 @@ def _default_phone_state(call_session_id: str) -> dict[str, Any]:
     return state
 
 
-async def _run_deep_transcript_analysis(call_session_id: str, reason: str) -> None:
+async def _run_deep_transcript_analysis(call_session_id: str, reason: str) -> dict[str, Any] | None:
     """Run the Phishing Worker deep analysis over the full transcript (async).
 
     Broadcasts a ``deep_analysis`` event with the deep verdict + extracted
     entities. Called on first HIGH escalation (reason='escalation') and at
     call end (reason='call_end').
+
+    Returns the broadcast event dict (or None if there was no transcript /
+    the analysis failed) so callers can persist the case.
     """
     phone_state = call_phone_states.get(call_session_id)
     transcript = list((phone_state or {}).get("transcript", []))
     if not transcript:
-        return
+        return None
 
     # Wait for in-flight transcript broadcasts to drain (bounded ~8s): call_end
     # arrives on the AUDIO socket while the EVENTS socket may still be processing
@@ -153,7 +175,7 @@ async def _run_deep_transcript_analysis(call_session_id: str, reason: str) -> No
         await asyncio.sleep(0.1)
     transcript = list((phone_state or {}).get("transcript", []))
     if not transcript:
-        return
+        return None
 
     try:
         result = await asyncio.wait_for(
@@ -162,7 +184,7 @@ async def _run_deep_transcript_analysis(call_session_id: str, reason: str) -> No
         )
     except Exception as err:  # noqa: BLE001
         print(f"[DEEP ANALYSIS ❌] {call_session_id} reason={reason}: {err}")
-        return
+        return None
 
     finding = result.get("phishing_finding") or {}
     score = int(finding.get("score", 0) or 0)
@@ -180,6 +202,146 @@ async def _run_deep_transcript_analysis(call_session_id: str, reason: str) -> No
     }
     await broadcast_event(call_session_id, event)
     print(f"[DEEP ANALYSIS ✅] {call_session_id} reason={reason} score={score}")
+    return event
+
+
+def _uuid_or_new(value: str | None) -> str:
+    """Return value if it is UUID-shaped, else a fresh UUID (fraud_cases.session_id is UUID NOT NULL)."""
+    if value:
+        try:
+            uuid.UUID(str(value))
+            return value
+        except (ValueError, AttributeError):
+            pass
+    return str(uuid.uuid4())
+
+
+async def _persist_call_case(
+    call_session_id: str, deep_event: dict[str, Any] | None
+) -> str | None:
+    """Persist a finished call as a fraud case row + transcripts + extracted entities.
+
+    Every call with a transcript is recorded (even LOW risk) so the user can
+    label it via the report card afterwards. All DB calls are SYNC Supabase
+    operations, so they run via ``asyncio.to_thread``.
+    """
+    phone_state = call_phone_states.get(call_session_id)
+    transcript = list((phone_state or {}).get("transcript", []))
+    if not transcript:
+        return None
+
+    call_data = session_store.get_call(call_session_id) or {}
+    user_id = str(call_data.get("user_id") or "")
+    caller_number = str(call_data.get("caller_number") or "")
+    real_session_id = str(call_data.get("session_id") or call_session_id)
+    if not user_id:
+        print(f"[PERSIST CASE ⚠️] {call_session_id}: no user_id — skipping persist")
+        return None
+
+    score = 0
+    tier = "LOW"
+    evidence: list[Any] = []
+    extracted_entities: dict[str, Any] = {}
+    research: dict[str, Any] = {}
+    if deep_event:
+        score = int(deep_event.get("score", 0) or 0)
+        tier = str(deep_event.get("risk_tier") or _risk_tier_for_score(score))
+        evidence = list(deep_event.get("evidence") or [])
+        extracted_entities = deep_event.get("extracted_entities") or {}
+        research = deep_event.get("research") or {}
+
+    xai_report = {
+        "deep_analysis": deep_event,
+        "evidence": evidence,
+        "extracted_entities": extracted_entities,
+        "research": research,
+        "confidence": float((deep_event or {}).get("confidence", 0.0) or 0.0),
+        "call_session_id": call_session_id,
+        "source_session_id": real_session_id,
+    }
+    action_taken = "AGENT_HANGUP" if tier == "HIGH" else "MONITORED"
+    status = "reported" if tier == "HIGH" else "pending"
+
+    try:
+        case_id = await asyncio.to_thread(
+            insert_fraud_case,
+            {
+                "session_id": _uuid_or_new(real_session_id),
+                "user_id": user_id,
+                "trigger_type": "CALL",
+                "risk_score": score,
+                "risk_tier": tier,
+                "status": status,
+                "action_taken": action_taken,
+                "xai_report": xai_report,
+                "caller_number": caller_number,
+            },
+        )
+        if not case_id:
+            print(f"[PERSIST CASE ❌] {call_session_id}: insert_fraud_case returned empty")
+            return None
+    except Exception as err:  # noqa: BLE001
+        print(f"[PERSIST CASE ❌] {call_session_id}: {err}")
+        return None
+
+    print(f"[PERSIST CASE ✅] {call_session_id}: case={case_id} score={score} tier={tier}")
+
+    # Persist per-utterance transcripts (speaker mapping to DB CHECK values)
+    speaker_map = {"SCAMMER": "CALLER", "CUSTOMER": "USER", "TRANSAFE_AI": "AI"}
+    for u in transcript:
+        speaker = speaker_map.get(str(u.get("speaker", "")).upper())
+        if not speaker:
+            continue
+        text = str(u.get("text", "")).strip()
+        if not text:
+            continue
+        try:
+            await asyncio.to_thread(
+                insert_call_transcript, case_id, speaker, text, score
+            )
+        except Exception as err:  # noqa: BLE001
+            print(f"[PERSIST CASE ⚠️] {call_session_id} transcript insert: {err}")
+
+    # Persist extracted entities (phone / account / URL)
+    entity_rows: list[dict[str, str]] = []
+    if caller_number:
+        entity_rows.append({"entity_type": "PHONE", "entity_value": caller_number})
+    for phone in extracted_entities.get("phone_numbers") or []:
+        entity_rows.append({"entity_type": "PHONE", "entity_value": str(phone)})
+    for acc in extracted_entities.get("bank_accounts") or []:
+        entity_rows.append({"entity_type": "ACCOUNT", "entity_value": str(acc)})
+    for url in extracted_entities.get("urls") or []:
+        entity_rows.append({"entity_type": "URL", "entity_value": str(url)})
+    if entity_rows:
+        try:
+            await asyncio.to_thread(insert_case_entities, case_id, entity_rows)
+        except Exception as err:  # noqa: BLE001
+            print(f"[PERSIST CASE ⚠️] {call_session_id} entities insert: {err}")
+
+    return case_id
+
+
+# Explicit financial/coercion demand tokens. Only these justify hanging up:
+# the agent must stay on the line until the scammer actually demands payment,
+# card/OTP details, or forbids hanging up / threatens arrest.
+_HANGUP_DEMAND_RE = re.compile(
+    r"(money|transfer|send\b|bank account|account number|otp|card (number|password|pin)|"
+    r"top.?up|payment|deposit|withdraw|safe account|akaun selamat|"
+    r"don'?t hang up|do not hang up|must not disconnect|line (is|must) secure|"
+    r"arrest|akan ditangkap|police|jail|immediate action|right now|asap|urgent)",
+    re.IGNORECASE,
+)
+
+
+def _scammer_demanded_payment(phone_state: dict[str, Any]) -> bool:
+    """True when the scammer's recent utterances contain an explicit demand.
+
+    Scans only SCAMMER turns (the agent's own AQ probe wording must not count),
+    limited to the last ~6 utterances so stale context can't trigger a hangup.
+    """
+    transcript = list((phone_state or {}).get("transcript") or [])
+    recent = [u for u in transcript if str(u.get("speaker", "")).upper() == "SCAMMER"][-6:]
+    return any(_HANGUP_DEMAND_RE.search(str(u.get("text", ""))) for u in recent)
 
 
 async def _run_autotalk_reply(call_session_id: str) -> None:
@@ -234,6 +396,20 @@ async def _run_autotalk_reply(call_session_id: str) -> None:
     signal_detected = bool(reply.get("signal_detected") or False)
     suspicion_delta = max(0, min(50, int(reply.get("suspicion_delta") or 0)))
 
+    # B) Deterministic hangup guard: never end the call unless the scammer has
+    # actually demanded payment/coercion. The LLM (or fallback) can be over-eager
+    # — e.g. suspicion pegged at 100 + identity-verification failure — so this
+    # keeps the agent on the line until an explicit demand is spoken.
+    if action == "hangup" and not _scammer_demanded_payment(phone_state):
+        print(f"[AUTO_TALK 🛡️] {call_session_id}: LLM wanted hangup but no explicit demand — staying on the line")
+        action = "continue"
+        signal_detected = False
+        suspicion_delta = 0
+        reply_text = (
+            "Okay, I understand. Please give me a moment — "
+            "I need to note this down carefully."
+        )
+
     # Scam confirmed → the agent's final line is the canonical farewell before hanging up.
     if action == "hangup":
         reply_text = "I'm ending this call, bye."
@@ -247,10 +423,10 @@ async def _run_autotalk_reply(call_session_id: str) -> None:
     aq_progress["asked"] = sorted(asked)
     phone_state["aq_progress"] = aq_progress
 
-    # TTS → MP3 (Yasmin voice), stored for the frontends to fetch and play
+    # TTS → MP3 (ElevenLabs primary, edge-tts Yasmin fallback), stored for the frontends to fetch and play
     tts_id = f"tts-{int(time.time() * 1000)}"
     try:
-        mp3_bytes = await synthesize_text_to_audio(reply_text, voice=AUTOTALK_VOICE)
+        mp3_bytes = await synthesize_agent_speech(reply_text, voice=AUTOTALK_VOICE)
     except Exception as err:  # noqa: BLE001
         print(f"[AUTO_TALK TTS ❌] {call_session_id}: {err}")
         mp3_bytes = b""
@@ -269,6 +445,10 @@ async def _run_autotalk_reply(call_session_id: str) -> None:
         "timestamp": datetime.now(UTC).isoformat(),
     })
     print(f"[AUTO_TALK 🗣️] {call_session_id}: \"{reply_text}\" action={action}")
+
+    # Record when the agent last spoke so the next reply waits out the TTS
+    # audio duration (pacing enforced in the reply guard).
+    phone_state["last_agent_reply_ts"] = time.time()
 
     # Confirmed scam signal → agent hangs up after its final line plays
     if action == "hangup":
@@ -511,6 +691,14 @@ async def _broadcast_text_and_highlights_impl(call_session_id: str, speaker_tag:
         async def _autotalk_reply_guard() -> None:
             try:
                 await asyncio.sleep(1.0)
+                # Pace replies: wait out any remaining gap since the agent's
+                # last spoken reply so the TTS audio never overlaps. Fragments
+                # that arrive during the wait are folded into the transcript,
+                # so the reply naturally answers the latest state.
+                last_reply_ts = float(phone_state.get("last_agent_reply_ts") or 0.0)
+                elapsed = time.time() - last_reply_ts
+                if elapsed < AUTO_TALK_REPLY_MIN_GAP:
+                    await asyncio.sleep(AUTO_TALK_REPLY_MIN_GAP - elapsed)
                 await _run_autotalk_reply(call_session_id)
             finally:
                 call_autotalk_busy.discard(call_session_id)

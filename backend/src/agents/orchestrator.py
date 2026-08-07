@@ -10,8 +10,11 @@ TRIGGER_WORKER_MAP: dict[str, list[str]] = {
     "TELEMETRY": ["telemetry"],
     "TRANSACTION": ["financial", "telemetry", "research"],
     "CALL": ["phone", "research", "phishing"],
+    # PHISHING activates ONLY the phishing worker here; the research worker
+    # runs as documented Stage 2 AFTER it (see route_after_phishing in
+    # graph.py) so it can verify the URLs/domains the phishing worker
+    # extracted from the material — including OCR text from uploaded images.
     "PHISHING": ["phishing"],
-    "REPORT": ["research"],
 }
 
 

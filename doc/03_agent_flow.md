@@ -143,25 +143,11 @@ stateDiagram-v2
         Workers activated in parallel
         via LangGraph Send API
     end note
-
-    note right of ActionDispatcher
-        REPORT trigger skips
-        RiskScorer and goes directly
-        to AdaptiveMemoryUpdate
-    end note
 ```
 
 ### Special Case: REPORT Trigger
 
-The `REPORT` trigger has a simplified graph path — it does not go through the full risk pipeline:
-
-```mermaid
-stateDiagram-v2
-    [*] --> Orchestrator : trigger_type = REPORT
-    Orchestrator --> ResearchWorker : mode=INGEST
-    ResearchWorker --> AdaptiveMemoryUpdate : LLM summary ready
-    AdaptiveMemoryUpdate --> [*] : case_id returned
-```
+The `REPORT` trigger does not go through the LangGraph pipeline at all. It is handled synchronously by the API, immediately returning a case ID. Memory updates are handled asynchronously when a case is manually labeled as fraud.
 
 ---
 
@@ -174,8 +160,7 @@ TRIGGER_WORKER_MAP = {
     "TELEMETRY":   ["telemetry"],
     "TRANSACTION": ["financial", "telemetry", "research"],
     "CALL":        ["phone", "research"],
-    "PHISHING":    ["phishing"],   # Research Worker runs AFTER Phishing Worker (see below)
-    "REPORT":      ["research"],   # research in INGEST mode
+    "PHISHING":    ["phishing"],
 }
 
 def orchestrator_node(state: GraphState) -> GraphState:

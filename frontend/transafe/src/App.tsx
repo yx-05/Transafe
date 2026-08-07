@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import { SimulationProvider } from './context/SimulationContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ApiProvider } from './context/ApiContext';
 import { UserNavigation } from './components/UserNavigation';
 
 import { HomePage } from './pages/HomePage';
@@ -56,11 +57,13 @@ const AppContent: React.FC = () => {
 export default function App() {
   return (
     <AuthProvider>
-      <SimulationProvider>
-        <Router>
-          <AppContent />
-        </Router>
-      </SimulationProvider>
+      <ApiProvider>
+        <SimulationProvider>
+          <Router>
+            <AppContent />
+          </Router>
+        </SimulationProvider>
+      </ApiProvider>
     </AuthProvider>
   );
 }

@@ -4,7 +4,7 @@ import inspect
 import json
 import logging
 import os
-import uuid
+import re
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -15,7 +15,7 @@ from pydantic import SecretStr
 from src.agents.llm import extract_json_object, invoke_groq_with_key_rotation
 from src.agents.prompts import build_research_prompt
 from src.agents.state import GraphState, WorkerFinding
-from src.db.vector_store import add_fraud_memory, hybrid_search_fraud_memory, search_fraud_memory
+from src.db.vector_store import hybrid_search_fraud_memory, search_fraud_memory
 from src.services.tavily import tavily_search
 
 logger = logging.getLogger(__name__)
@@ -69,12 +69,6 @@ Return your finding as a SINGLE JSON object:
   "confidence": float (0.0-1.0),
   "evidence": ["bullet point 1", "bullet point 2"]
 }"""
-
-REPORT_SUMMARISE_PROMPT = """You are a fraud investigator. Summarize the user-submitted fraud report into a concise narrative of how the scam transpired.
-User Report:
-"{description}"
-Return a short summary string."""
-
 
 def _extract_entities_from_state(state: GraphState) -> list[str]:
     """Gather all entity strings from payload, extracted_entities, and associated_case_context."""
@@ -132,6 +126,49 @@ def _extract_entities_from_state(state: GraphState) -> list[str]:
     return entities
 
 
+def _extract_phishing_targets_from_material(state: GraphState) -> list[str]:
+    """Extract URLs/domains from PHISHING material.
+
+    For IMAGE submissions the phishing worker (Stage 1) runs before this worker
+    in the graph, so its OCR text and visual description are also scanned — the
+    URL typically only exists inside the screenshot itself.
+    """
+    payload = state.get("trigger_payload") or {}
+    material = payload.get("material") or payload.get("phishing_material") or payload
+    raw_content = str(material.get("content") or "")
+
+    # Stage 1 phishing worker output (available because research runs after
+    # phishing for PHISHING triggers).
+    ocr_text = str(state.get("phishing_ocr_text") or "")
+    if ocr_text:
+        raw_content = f"{raw_content}\n{ocr_text}"
+    image_desc = str(state.get("phishing_image_description") or "")
+    if image_desc:
+        raw_content = f"{raw_content}\n{image_desc}"
+
+    if not raw_content.strip():
+        return []
+
+    targets: list[str] = []
+    url_pattern = re.compile(r"https?://[^\s]+|www\.[^\s]+", re.IGNORECASE)
+    domain_pattern = re.compile(
+        r"\b(?:[a-zA-Z0-9-]+\.)+(?:com|net|org|xyz|site|top|cc|my|co|gov|id|io|app)\b",
+        re.IGNORECASE,
+    )
+
+    for match in url_pattern.findall(raw_content):
+        cleaned = match.rstrip(".,;:!?)\"]'")
+        if cleaned and cleaned not in targets:
+            targets.append(cleaned)
+
+    for match in domain_pattern.findall(raw_content):
+        cleaned = match.rstrip(".,;:!?)\"]'")
+        if cleaned and cleaned not in targets:
+            targets.append(cleaned)
+
+    return targets
+
+
 GENERIC_RECIPIENT_NAMES = {
     "standard transfer account",
     "standard account",
@@ -154,6 +191,65 @@ GENERIC_RECIPIENT_NAMES = {
 
 def _run_query_mode(state: GraphState) -> WorkerFinding:
     """Execute QUERY mode logic for Research Worker."""
+    if state.get("trigger_type") == "PHISHING":
+        phishing_targets = _extract_phishing_targets_from_material(state)
+        if not phishing_targets:
+            return WorkerFinding(
+                worker="research",
+                score=0,
+                confidence=0.75,
+                evidence=["No phishing URL or domain found to verify."],
+            )
+
+        evidence: list[str] = []
+        score = 0
+        confidence = 0.8
+
+        for target in phishing_targets:
+            try:
+                internal_hits = hybrid_search_fraud_memory(
+                    query_text=target,
+                    threshold=0.55,
+                    top_k=5,
+                )
+                for hit in internal_hits or []:
+                    sim = float(hit.get("similarity", 0.0))
+                    if sim > 0:
+                        score = max(score, int(sim * 100))
+                        confidence = max(confidence, 0.9 if sim >= 0.75 else 0.82)
+                        evidence.append(
+                            f"Internal fraud memory matched '{target}' (similarity {sim:.2f}): {str(hit.get('content', ''))[:140]}"
+                        )
+            except Exception as err:  # noqa: BLE001
+                logger.warning(f"Phishing internal search failed for {target}: {err}")
+
+            try:
+                query = f"{target} phishing scam Bank Negara Malaysia"
+                raw_hits = tavily_search([query])
+                if inspect.isawaitable(raw_hits):
+                    continue
+                if isinstance(raw_hits, list):
+                    for hit in raw_hits[:3]:
+                        score = max(score, 75)
+                        confidence = max(confidence, 0.9)
+                        evidence.append(
+                            f"Web search confirmed phishing-related report for '{target}': {hit.get('url', 'web report')}"
+                        )
+            except Exception as err:  # noqa: BLE001
+                logger.warning(f"Phishing web search failed for {target}: {err}")
+
+        if not evidence:
+            evidence = [
+                "No internal fraud memory match or public phishing report was found for the submitted link.",
+            ]
+
+        return WorkerFinding(
+            worker="research",
+            score=score,
+            confidence=confidence,
+            evidence=evidence,
+        )
+
     entities = _extract_entities_from_state(state)
     if not entities:
         return WorkerFinding(
@@ -356,51 +452,13 @@ Internal Fraud DB Hits: {json.dumps(internal_hits, indent=2)}"""
     return finding
 
 
-def _run_ingest_mode(state: GraphState) -> WorkerFinding:
-    """Execute INGEST mode logic for REPORT trigger."""
-    payload = state.get("trigger_payload") or {}
-    description = str(payload.get("description") or payload.get("report_text") or "Fraud report")
-    fraud_type = str(payload.get("fraud_type", "user_report"))
-    case_id = str(state.get("case_id") or uuid.uuid4())
-
-    summary = description
-    try:
-        llm_resp = llm.invoke(REPORT_SUMMARISE_PROMPT.format(description=description))
-        summary = str(llm_resp.content).strip()
-    except Exception as err:  # noqa: BLE001
-        logger.debug(f"Report summarization LLM failed: {err}")
-
-    metadata = {
-        "phone_numbers": payload.get("phone_numbers", []),
-        "bank_accounts": payload.get("bank_accounts", []),
-        "urls": payload.get("urls", []),
-        "amount_lost_myr": payload.get("amount_lost_myr"),
-        "risk_tier": "HIGH",
-        "source": "user_report",
-    }
-
-    try:
-        add_fraud_memory(case_id, fraud_type, summary, metadata)
-    except Exception as err:  # noqa: BLE001
-        logger.warning(f"Failed to ingest fraud memory: {err}")
-
-    return WorkerFinding(
-        worker="research",
-        score=0,
-        confidence=1.0,
-        evidence=[f"Successfully ingested fraud report '{fraud_type}' into memory (case {case_id})"],
-    )
-
-
 def research_worker_node(state: GraphState) -> dict[str, Any]:
     """Pure state transformation node for Research Worker.
 
-    Supports QUERY mode (pgvector RAG + Tavily fallback) and INGEST mode (REPORT trigger).
+    QUERY mode (pgvector RAG + Tavily fallback). Adaptive learning happens
+    exclusively through the human-in-the-loop Case History & Fraud Labeling
+    flow (vector_memory_utils), not through user report ingestion.
     """
-    trigger_type = state.get("trigger_type", "TRANSACTION")
-    if trigger_type == "REPORT":
-        finding = _run_ingest_mode(state)
-    else:
-        finding = _run_query_mode(state)
+    finding = _run_query_mode(state)
 
     return {"research_finding": finding.model_dump()}

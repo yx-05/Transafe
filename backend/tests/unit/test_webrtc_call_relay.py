@@ -162,3 +162,68 @@ def test_dual_role_audio_and_event_websockets():
             assert s_msg["type"] == "suspicion_update"
             assert s_msg["suspicion_score"] is not None
             assert s_msg["risk_tier"] in ("LOW", "MEDIUM", "HIGH")
+
+
+# -------------------------------------------------------------------
+# AUTO_TALK hangup guard tests (deterministic demand check)
+# -------------------------------------------------------------------
+def test_scammer_demanded_payment_requires_explicit_demand():
+    """The hangup guard must return True only when the scammer demanded payment."""
+    from src.api.websocket_call import _scammer_demanded_payment
+
+    # Explicit transfer demand → hangup justified
+    assert _scammer_demanded_payment({
+        "transcript": [
+            {"speaker": "SCAMMER", "text": "Just transfer everything to our safe account now."},
+        ]
+    }) is True
+
+    # OTP / card details demand → hangup justified
+    assert _scammer_demanded_payment({
+        "transcript": [
+            {"speaker": "SCAMMER", "text": "Please read me your OTP code so we can secure the account."},
+        ]
+    }) is True
+
+    # Forbidding hangup / arrest threat → hangup justified
+    assert _scammer_demanded_payment({
+        "transcript": [
+            {"speaker": "SCAMMER", "text": "Do not hang up or you will be arrested immediately."},
+        ]
+    }) is True
+
+
+def test_scammer_demanded_payment_ignores_identity_failure_and_agent_words():
+    """Identity-verification failure alone must NOT justify a hangup, and the
+    agent's own anchor-question wording must not count against the caller."""
+    from src.api.websocket_call import _scammer_demanded_payment
+
+    # Identity contradiction only (the case from the demo log) → stay on the line
+    assert _scammer_demanded_payment({
+        "transcript": [
+            {"speaker": "SCAMMER", "text": "I'm your friend. I'm not any employee."},
+        ]
+    }) is False
+
+    # The AGENT asks about transfers — must not be treated as a scammer demand
+    assert _scammer_demanded_payment({
+        "transcript": [
+            {"speaker": "TRANSAFE_AI", "text": "Have you been asked to transfer money to a safe account?"},
+        ]
+    }) is False
+
+    # Truncated / incomplete utterance with no demand token → stay on the line
+    assert _scammer_demanded_payment({
+        "transcript": [
+            {"speaker": "SCAMMER", "text": "And, also, I need you to"},
+        ]
+    }) is False
+
+
+def test_scammer_demanded_payment_only_counts_recent_utterances():
+    """Old context (beyond the last 6 scammer turns) must not trigger a hangup."""
+    from src.api.websocket_call import _scammer_demanded_payment
+
+    old_demand = [{"speaker": "SCAMMER", "text": "send me money"}] * 8
+    recent_benign = [{"speaker": "SCAMMER", "text": "I'm just an old friend."}] * 8
+    assert _scammer_demanded_payment({"transcript": old_demand + recent_benign}) is False

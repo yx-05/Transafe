@@ -107,6 +107,7 @@ CREATE TABLE public.accounts (
     frozen_by       TEXT,   -- 'system' | 'admin'
     frozen_reason   TEXT,
     unfreeze_at     TIMESTAMPTZ,  -- set for auto-cooling-off unfreeze
+    pin_hash        TEXT,         -- hashed 4-digit security PIN
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -175,6 +176,8 @@ CREATE TABLE public.fraud_cases (
     transaction_id  UUID,           -- FK if trigger was TRANSACTION
     caller_number   TEXT,           -- set if trigger was CALL
     phishing_source TEXT,           -- set if trigger was PHISHING
+    user_label      TEXT NOT NULL DEFAULT 'unlabeled', -- unlabeled | fraud | benign
+    labeled_at      TIMESTAMPTZ,    -- set when user_label is updated
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -184,6 +187,7 @@ CREATE INDEX idx_fraud_cases_risk_tier   ON public.fraud_cases (risk_tier);
 CREATE INDEX idx_fraud_cases_status      ON public.fraud_cases (status);
 CREATE INDEX idx_fraud_cases_trigger     ON public.fraud_cases (trigger_type);
 CREATE INDEX idx_fraud_cases_created_at  ON public.fraud_cases (created_at DESC);
+CREATE INDEX idx_fraud_cases_user_label  ON public.fraud_cases (user_label, created_at DESC);
 ```
 
 ---
@@ -317,6 +321,25 @@ CREATE TABLE public.beneficiaries (
     bank_name        TEXT NOT NULL,
     created_at       TIMESTAMPTZ DEFAULT NOW()
 );
+```
+
+---
+
+### Table: `public.learned_keywords`
+
+Adaptive playbook-merge store for novel scam keywords.
+
+```sql
+CREATE TABLE public.learned_keywords (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    keyword         TEXT NOT NULL,
+    keyword_type    TEXT NOT NULL CHECK (keyword_type IN ('heavy', 'light')),
+    source_case_id  UUID REFERENCES public.fraud_cases(id) ON DELETE CASCADE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (keyword, keyword_type)
+);
+
+CREATE INDEX idx_learned_keywords_type ON public.learned_keywords (keyword_type);
 ```
 
 ---

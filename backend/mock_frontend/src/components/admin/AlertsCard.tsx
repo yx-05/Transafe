@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { AdminAlertItem, BackendConfig } from '../../types/api';
 import { TranSafeApiClient } from '../../services/api';
-import { Bell, CheckCircle2, Clock } from 'lucide-react';
+import { Bell, CheckCircle2, Clock, RefreshCw } from 'lucide-react';
 
 interface AlertsCardProps {
   config: BackendConfig;
@@ -9,14 +9,18 @@ interface AlertsCardProps {
 
 export const AlertsCard: React.FC<AlertsCardProps> = ({ config }) => {
   const [alerts, setAlerts] = useState<AdminAlertItem[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const fetchAlerts = async () => {
+    setLoading(true);
     const client = new TranSafeApiClient(config);
     try {
       const res = await client.listAdminAlerts();
       setAlerts(res.items || []);
     } catch (err: any) {
       console.error('Fetch alerts error', err);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -28,7 +32,7 @@ export const AlertsCard: React.FC<AlertsCardProps> = ({ config }) => {
     const client = new TranSafeApiClient(config);
     try {
       await client.updateAdminAlert(alertId, 'reviewed');
-      setAlerts(alerts.map((a) => (a.alert_id === alertId ? { ...a, status: 'reviewed' } : a)));
+      setAlerts(alerts.filter((a) => a.alert_id !== alertId));
     } catch (err: any) {
       alert(`Update failed: ${err.message}`);
     }
@@ -41,7 +45,9 @@ export const AlertsCard: React.FC<AlertsCardProps> = ({ config }) => {
           <Bell className="card-icon text-red" size={20} />
           <h3>Real-Time Admin Operations Alerts Queue</h3>
         </div>
-        <span className="card-tag red">HIGH PRIORITY</span>
+        <button className="btn-icon-text" onClick={fetchAlerts} disabled={loading}>
+          <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh
+        </button>
       </div>
 
       <div className="alerts-list">

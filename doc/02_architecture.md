@@ -9,7 +9,9 @@
 ## Table of Contents
 
 1. [Architecture Overview](#1-architecture-overview)
-2. [System Architecture Diagram](#2-system-architecture-diagram)
+2. [System Architecture Diagrams](#2-system-architecture-diagrams)
+   - 2.1 [High-Level Functional Architecture](#21-high-level-functional-architecture)
+   - 2.2 [Detailed System Architecture](#22-detailed-system-architecture)
 3. [Component Descriptions](#3-component-descriptions)
 4. [Technology Stack & Decision Rationale](#4-technology-stack--decision-rationale)
 5. [Data Flow — End-to-End Sequence](#5-data-flow--end-to-end-sequence)
@@ -50,7 +52,108 @@ TranSafe follows a **layered multi-agent architecture** with four distinct layer
 
 ---
 
-## 2. System Architecture Diagram
+## 2. System Architecture Diagrams
+
+### 2.1 High-Level Functional Architecture (Agentic System Design)
+
+This high-level functional diagram illustrates the core lifecycle of a fraud detection event in TranSafe, focusing on the Multi-Agent System (MAS) architecture and how specialized agents collaborate autonomously:
+
+```mermaid
+graph TD
+    classDef agent fill:#f4e6fa,stroke:#b175d6,stroke-width:2px;
+    classDef tool fill:#e6f3fa,stroke:#75bad6,stroke-width:1px;
+    
+    User["👤 User (Mobile App)"] -->|Triggers Event| API["⚡ FastAPI Backend"]
+    
+    subgraph "LangGraph Agentic Orchestration"
+        direction TB
+        ORC["🧠 Orchestrator Agent\n(Evaluates & Delegates)"]:::agent
+        
+        subgraph "Autonomous Specialist Agents (Parallel Execution)"
+            TW["🤖 Telemetry Agent\n(Behavior)"]:::agent
+            FW["🤖 Financial Agent\n(Transactions)"]:::agent
+            RW["🤖 Research Agent\n(Background)"]:::agent
+            PW["🤖 Phone Agent\n(Voice)"]:::agent
+            PAW["🤖 Phishing Agent\n(Content)"]:::agent
+        end
+        
+        Scorer["⚖️ Risk Scorer Agent\n(Committee Evaluator)"]:::agent
+        XAI["💬 Explainable AI Agent\n(Reporter)"]:::agent
+    end
+    
+    subgraph "Agent Tools & Memory"
+        DB[("🗄️ Relational DB\n(Deterministic History)")]:::tool
+        Vector[("🧠 Fraud Memory\n(Semantic RAG)")]:::tool
+        LLM["💡 LLM Engine\n(Inference Core)"]:::tool
+    end
+    
+    API -->|"Initializes Shared State"| ORC
+    ORC -->|"Conditionally Routes\n(LangGraph Send)"| TW & FW & RW & PW & PAW
+    
+    %% Tool Usage
+    TW -.->|"Queries"| DB
+    FW -.->|"Queries"| DB
+    RW -.->|"Semantic Search"| Vector
+    PW -.->|"Semantic Search"| Vector
+    PAW -.->|"Semantic Search"| Vector
+    
+    TW & FW & RW & PW & PAW -.->|"Prompts for Reasoning"| LLM
+    XAI -.->|"Prompts for Reasoning"| LLM
+    
+    %% Flow completion
+    TW & FW & RW & PW & PAW -->|"Appends Findings to State"| Scorer
+    Scorer -->|"Normalizes & Tiers"| XAI
+    XAI -->|"Generates JSON Report"| Action["🛡️ Action Dispatcher"]
+    
+    Action -->|"Real-time Enforcement\n(Approve / Challenge / Freeze)"| User
+```
+
+#### Detailed Agentic Workflow & Roles
+
+TranSafe is engineered as a **Multi-Agent System (MAS)** orchestrated by LangGraph. Instead of relying on a monolithic prompt, it employs a team of specialized, autonomous agents that communicate via a shared memory state (`GraphState`).
+
+**1. Orchestrator Agent (The Manager)**
+* **Role**: Acts as the central router and manager. It does not perform fraud analysis itself; instead, it prevents LLM bloat by only waking up the specific agents needed for a given task.
+* **Workflow**: When an event hits the backend (e.g., `TRANSACTION`, `CALL`, `TELEMETRY`), the Orchestrator evaluates the trigger payload and dynamically determines the routing paths. For example, a transaction trigger will activate the Financial, Research, and Telemetry agents, whereas a phone call will activate the Phone and Research agents. It uses LangGraph's `Send` API to fan-out execution to these agents in parallel.
+
+**2. Autonomous Specialist Agents (The Workers)**
+Woken up by the Orchestrator, these agents operate concurrently. Each agent possesses specific tools, domain knowledge, and a dedicated LLM prompt tailored to its responsibility.
+
+* **Financial Agent**:
+    * **Role**: Analyzes monetary anomalies.
+    * **Tools**: `fetch_user_transaction_history` (Relational DB query).
+    * **Workflow**: It retrieves the user's past 90-day transaction baseline (excluding pending cases) and compares the new transaction's amount, time, and recipient. It reasons about velocity and deviation to produce a financial anomaly score.
+* **Telemetry Agent**:
+    * **Role**: Detects behavioral anomalies and physical coercion markers.
+    * **Tools**: `fetch_telemetry_events` (Relational DB query).
+    * **Workflow**: It extracts device posture, typing speeds, location changes, and app navigation patterns. It uses a faster, lighter LLM (`llama-3.1-8b-instant`) to rapidly pattern-match these signals against known coercion indicators (e.g., sudden screen-sharing activation + erratic typing).
+* **Research Agent**:
+    * **Role**: Conducts background checks and historical RAG comparisons.
+    * **Tools**: `search_fraud_memory` (pgvector semantic search), `lookup_scam_recipient` (Blacklist DB query).
+    * **Workflow**: It embeds the target entities (phone numbers, account numbers, URLs) and queries the vector database for similar past fraud narratives. It cross-references these matches to determine if the current scenario matches a known scam playbook.
+* **Phone Agent**:
+    * **Role**: Analyzes live conversational context for coercion or impersonation.
+    * **Tools**: WebRTC audio stream, Whisper STT integration.
+    * **Workflow**: It listens to the transcription chunks of a live call, reasoning over the caller's tone, urgency keywords ("police", "arrest", "transfer immediately"), and dialogue structure to detect social engineering tactics.
+* **Phishing Agent**:
+    * **Role**: Evaluates suspicious messages and URLs.
+    * **Tools**: `search_fraud_memory` (pgvector).
+    * **Workflow**: It breaks down submitted text or URLs, looking for spoofed domains, urgency hooks, and malicious payloads, comparing the attack vector against known phishing campaigns in the memory store.
+
+**3. The Review Committee (Scorer & XAI)**
+Once the parallel workers complete their tasks, they append their findings (score + evidence) back to the `GraphState`.
+* **Risk Scorer Agent**: Acts as the quantitative judge. It applies dynamic weights to the findings (e.g., Financial anomalies might carry a 30% weight, while Research matches carry 25%), normalizing them into a final 0-100 risk score and tier (`LOW`, `MEDIUM`, `HIGH`). It also enforces deterministic overrides (e.g., a direct hit on a police blacklist forces a HIGH score regardless of other agents).
+* **Explainable AI (XAI) Agent**: Acts as the reporter. It takes the mathematical score and the raw evidence arrays from all workers and synthesizes them into a cohesive, human-readable JSON narrative. This ensures that every automated decision can be transparently explained to the user or an auditor.
+
+**4. Action Dispatcher (Enforcement)**
+Driven by the final risk tier, this deterministic node executes the system's response:
+* **LOW (0-39)**: Writes a silent approval to the database.
+* **MEDIUM (40-69)**: Triggers a contextual warning on the user's device and initiates a biometric step-up challenge.
+* **HIGH (70-100)**: Immediately freezes the transaction, sets a 30-minute cooling-off timer (to disrupt live coercion), and generates an alert on the admin dashboard.
+
+---
+
+### 2.2 Detailed System Architecture
 
 ```mermaid
 graph TB
@@ -254,87 +357,188 @@ Workers query the table via the `search_fraud_memory` PostgreSQL RPC (cosine sim
 
 ---
 
-## 5. Data Flow — End-to-End Sequence
+## 5. Detailed Trigger Workflows (End-to-End Sequences)
 
-### 5.1 Transaction Risk Assessment (Happy Path)
+The following sequence diagrams illustrate the specific Agentic workflows triggered by different events from the mobile application.
+
+### 5.1 TRANSACTION Trigger (Parallel Anomaly Detection)
+
+This is the core financial workflow. It evaluates a pending transfer by spinning up three specialized agents in parallel to cross-reference behavior, financial history, and external intelligence.
 
 ```mermaid
 sequenceDiagram
     participant App as Mobile App
-    participant WS as WebSocket /ws/session/{id}
-    participant API as FastAPI
-    participant ORC as Orchestrator
-    participant FW as Financial Worker
-    participant TW as Telemetry Worker
-    participant RW as Research Worker
-    participant SB as Supabase
-    participant SB_VEC as Supabase pgvector
-    participant GROQ as Groq API
-    participant XAI as XAI Node
-    participant ACT as Action Dispatcher
+    participant WS as WebSocket (/ws/session)
+    participant ORC as Orchestrator Agent
+    participant FW as Financial Agent
+    participant TW as Telemetry Agent
+    participant RW as Research Agent
+    participant SC as Scorer & XAI
+    participant DB as DB & pgvector
 
-    App->>API: POST /api/v1/trigger/transaction
-    API-->>App: 202 Accepted {session_id}
-    App->>WS: Connect /ws/session/{session_id}
-
-    API->>ORC: invoke_graph(trigger=TRANSACTION, payload)
-    ORC->>WS: status: "Orchestrator routing..."
-
-    par Financial Worker
-        ORC->>FW: activate
-        FW->>SB: SELECT transactions WHERE user_id=...
-        FW->>GROQ: analyse transaction pattern
-        GROQ-->>FW: finding {score, evidence}
-        FW->>WS: status: "Financial Worker: suspicious transfer pattern detected"
-    and Telemetry Worker
-        ORC->>TW: activate
-        TW->>SB: SELECT telemetry_events WHERE session_id=...
-        TW->>GROQ: analyse behaviour signals
-        GROQ-->>TW: finding {score, evidence}
-        TW->>WS: status: "Telemetry Worker: normal behaviour profile"
-    and Research Worker
-        ORC->>RW: activate
-        RW->>SB_VEC: search_fraud_memory(recipient_account, top_k=5)
-        SB_VEC-->>RW: similar fraud cases
-        RW->>GROQ: assess background risk
-        GROQ-->>RW: finding {score, evidence}
-        RW->>WS: status: "Research Worker: recipient account found in fraud database"
+    App->>ORC: POST /api/v1/trigger/transaction
+    ORC->>WS: Stream: "Routing agents..."
+    
+    par Financial Evaluation
+        ORC->>FW: Activate
+        FW->>DB: Query 90-day baseline & pending tx
+        FW->>FW: LLM analyzes amount/recipient anomalies
+        FW-->>ORC: Append Financial Finding
+    and Behavioral Evaluation
+        ORC->>TW: Activate
+        TW->>DB: Query session events
+        TW->>TW: LLM analyzes typing & coercion markers
+        TW-->>ORC: Append Telemetry Finding
+    and Intelligence Evaluation
+        ORC->>RW: Activate
+        RW->>DB: RAG query on recipient account
+        RW->>RW: LLM cross-references past scams
+        RW-->>ORC: Append Research Finding
     end
 
-    FW & TW & RW -->>ORC: findings[]
-    ORC->>+XAI: aggregate findings → score=82, tier=HIGH
-    XAI->>GROQ: generate explanation
-    GROQ-->>XAI: explanation JSON
-    XAI-->>-ORC: verdict + explanation
-
-    ORC->>ACT: dispatch(tier=HIGH)
-    ACT->>SB: UPDATE transactions SET status=frozen, unfreeze_at=+30min
-    ACT->>SB: INSERT admin_alerts
-    ACT->>WS: final verdict {tier:HIGH, score:82, explanation, freeze_duration:1800}
-
-    App->>App: Display cooling-off warning to user
+    ORC->>SC: Aggregate findings
+    SC->>SC: Calculate Score, Tier, and generate XAI JSON
+    SC->>DB: Update transactions (Freeze if HIGH risk)
+    SC->>WS: Stream Final Verdict (Risk Tier + Explanation)
 ```
 
-### 5.2 Fraud Report → Adaptive Memory Update
+#### Workflow Breakdown:
+1. **Trigger & Routing**: The Mobile App sends the transaction payload. The Orchestrator receives this and concurrently activates the Financial, Telemetry, and Research Agents.
+2. **Parallel Context Gathering**:
+   - The **Financial Agent** fetches the user's 90-day transaction history to establish a baseline.
+   - The **Telemetry Agent** retrieves the recent behavioral events (typing speed, app navigation) for the active session.
+   - The **Research Agent** queries the fraud memory vector database using the recipient's account details.
+3. **Agent Inference**: Each agent independently queries the LLM with its domain-specific context to identify anomalies and produce a finding (score and evidence).
+4. **Scoring & Enforcement**: The Risk Scorer aggregates the findings, applying weighted averages. If the final tier is HIGH, the Action Dispatcher updates the database to freeze the transaction and initiates a 30-minute cooling-off period, alerting the user via the WebSocket stream.
+
+### 5.2 CALL Trigger (Real-Time Voice Analysis)
+
+The CALL trigger opens a persistent WebSocket connection to stream raw audio, performing sub-second analysis to protect users actively on the phone with a potential scammer.
 
 ```mermaid
 sequenceDiagram
     participant App as Mobile App
-    participant API as FastAPI
-    participant RW as Research Worker
-    participant GROQ as Groq API
-    participant SB_VEC as Supabase pgvector
-    participant SB as Supabase
+    participant WS as WebSocket (/ws/call)
+    participant STT as Whisper STT (Groq)
+    participant PW as Phone Agent (Highlighter)
+    participant RW as Research Agent
 
-    App->>API: POST /api/v1/trigger/report
-    API->>RW: activate(mode=INGEST)
-    RW->>GROQ: summarise fraud report into structured narrative
-    GROQ-->>RW: summary + extracted entities (phones, accounts, fraud_type)
-    RW->>SB_VEC: add_fraud_memory(summary, metadata={phones, accounts, fraud_type})
-    RW->>SB: INSERT fraud_cases (status=reported)
-    RW-->>API: {case_id, status: ingested}
-    API-->>App: 200 OK {case_id, message: "Report received. Thank you."}
+    App->>WS: Connect & Stream Audio Chunks
+    
+    loop Every Audio Chunk (~2s)
+        WS->>STT: Forward Audio Bytes
+        STT-->>PW: Return Transcribed Utterance
+        
+        par Utterance Risk Scoring
+            PW->>PW: Fast Keyword Match (Dictionary)
+            PW->>PW: LLM Coercion/Impersonation Check
+            PW->>WS: Push Highlight Event (JSON Spans)
+            WS-->>App: Render Risk Overlay on screen
+        and Background Verification
+            PW->>RW: Forward Extracted Entities (e.g., claimed police badge)
+            RW->>RW: Check pgvector Fraud Memory
+            RW-->>PW: Update Risk Context
+        end
+    end
 ```
+
+#### Workflow Breakdown:
+1. **Audio Streaming**: The user connects to a persistent WebSocket. Audio chunks are streamed continuously every ~2 seconds.
+2. **Transcription**: The backend forwards these chunks to the Whisper STT engine, producing text utterances.
+3. **Real-Time Highlighting**: The **Phone Agent** processes each utterance immediately. It performs a fast dictionary match for known scam phrases and a deeper LLM evaluation to detect coercion or impersonation. Annotated text spans (highlights) are pushed back to the app's UI instantly.
+4. **Background Verification**: Concurrently, any entities mentioned during the call (e.g., a "police badge number" or "safe account") are extracted and forwarded to the **Research Agent**, which queries the pgvector fraud memory to enrich the overall risk context.
+
+### 5.3 PHISHING Trigger (Sequential Two-Stage Pipeline)
+
+Unlike transactions, phishing analysis requires a two-stage approach: the system must first extract entities from the raw screenshot/text before it can research them.
+
+```mermaid
+sequenceDiagram
+    participant App as Mobile App
+    participant ORC as Orchestrator
+    participant PAW as Phishing Agent (Stage 1)
+    participant RW as Research Agent (Stage 2)
+    participant DB as pgvector Memory
+
+    App->>ORC: POST /api/v1/trigger/phishing
+    
+    Note over ORC, PAW: Stage 1: Extraction & Content Analysis
+    ORC->>PAW: Activate
+    PAW->>PAW: LLM analyzes payload for urgency hooks
+    PAW->>PAW: Extracts URLs, Phone Numbers, Accounts
+    PAW-->>ORC: Append Phishing Finding & Extracted Entities
+    
+    Note over ORC, RW: Stage 2: Intelligence Correlation
+    ORC->>RW: Activate (Passing Extracted Entities)
+    RW->>DB: Semantic Search for extracted links/numbers
+    DB-->>RW: Return historical matches
+    RW->>RW: LLM formulates intelligence finding
+    RW-->>ORC: Append Research Finding
+    
+    ORC->>ORC: Route to Scorer for Final Verdict
+```
+
+#### Workflow Breakdown:
+1. **Stage 1 (Extraction)**: The Orchestrator activates the **Phishing Agent**, passing it the suspicious text or OCR'd screenshot. The agent uses the LLM to analyze the content for urgency hooks and extracts discrete entities (URLs, phone numbers, bank accounts) into the shared `GraphState`.
+2. **Stage 2 (Intelligence Correlation)**: Waiting for Stage 1 to complete, the Orchestrator then activates the **Research Agent**. This agent takes the newly extracted entities and performs a semantic RAG search against the `pgvector` database to find historical scam matches.
+3. **Verdict**: Both agents' findings are appended to the state, and the Risk Scorer calculates the final risk probability of the phishing attempt.
+
+### 5.4 TELEMETRY Trigger (Passive Ingestion & Evaluation)
+
+This trigger operates passively in the background of the mobile app to catch Device Takeover (DTO) or coercion before a transaction even begins.
+
+```mermaid
+sequenceDiagram
+    participant App as Mobile App
+    participant API as FastAPI Backend
+    participant TW as Telemetry Agent
+    participant DB as Relational DB
+
+    App->>API: POST /api/v1/telemetry/event (Passive)
+    API->>DB: Insert raw event (e.g., SCREEN_SHARE_STARTED)
+    
+    Note over App, TW: Periodic Background Evaluation (or on App Open)
+    App->>API: POST /api/v1/trigger/telemetry
+    API->>TW: Activate
+    TW->>DB: Fetch last 100 events for session
+    TW->>TW: LLM evaluates holistic session posture
+    TW-->>App: Return pre-transaction risk posture
+```
+
+#### Workflow Breakdown:
+1. **Passive Ingestion**: As the user navigates the app, the Mobile App silently fires raw telemetry events (e.g., screen orientation changes, clipboard copy/paste, screen sharing flags) to a lightweight REST endpoint, storing them in the database.
+2. **Active Evaluation**: Periodically, or right before a critical action (like opening the transfer screen), the app triggers an active evaluation. The **Telemetry Agent** is activated, pulling the last 100 events for the session.
+3. **Posture Assessment**: The agent's LLM evaluates the holistic behavioral posture, looking for patterns indicative of remote access trojans (RATs) or physical coercion, returning a pre-transaction risk posture to the app.
+
+### 5.5 REPORT Trigger (HITL Adaptive Learning)
+
+When a user manually reports a fraud case (Human-In-The-Loop), the system bypasses the LangGraph analysis pipeline and directly leverages a background task to adapt its memory, making the system smarter for the next user.
+
+```mermaid
+sequenceDiagram
+    participant Admin as Admin / User
+    participant API as FastAPI Backend
+    participant Task as Background Task
+    participant LLM as LLM Engine
+    participant DB as pgvector & DB
+
+    Admin->>API: POST /api/v1/cases/{id}/label (Status: FRAUD)
+    API-->>Admin: 200 OK (Label applied)
+    
+    Note over API, DB: Asynchronous Adaptive Learning
+    API->>Task: Trigger _build_learning_memory_from_case()
+    Task->>DB: Fetch case transcripts, phishing text, entities
+    Task->>LLM: Summarize into structured narrative
+    LLM-->>Task: Extracted playbooks & novel keywords
+    Task->>DB: Insert into learned_keywords
+    Task->>DB: Embed narrative and Insert into fraud_memory
+```
+
+#### Workflow Breakdown:
+1. **Human-In-The-Loop Verification**: When users meet a true fraud,  they can confirms it by labeling the case status as "FRAUD" via a REST endpoint.
+2. **Asynchronous Processing**: The API immediately acknowledges the request and kicks off a background task (`_build_learning_memory_from_case`) so the user isn't kept waiting.
+3. **Adaptive Memory Generation**: The background task fetches all context related to the case (transcripts, entities, phishing text). The LLM summarizes the scam into a structured playbook narrative, extracting novel scammer keywords.
+4. **System Learning**: The novel keywords are added to the `learned_keywords` table, and the embedded narrative is inserted into `public.fraud_memory`, instantly updating the RAG knowledge base for all future Research Agent queries.
 
 ---
 

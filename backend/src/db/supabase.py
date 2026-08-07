@@ -1,11 +1,14 @@
 """Supabase Relational Database Client and CRUD Operations for TranSafe."""
 
+import logging
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from pydantic import BaseModel
 from supabase import Client, create_client
+
+logger = logging.getLogger("transafe.supabase")
 
 supabase_client: Client | None = None
 
@@ -102,6 +105,60 @@ def update_fraud_case_status(
     client.table("fraud_cases").update(update_data).eq("id", case_id).execute()
 
 
+def update_fraud_case_label(case_id: str, label: str) -> None:
+    """Set the human-in-the-loop user label on a fraud case.
+
+    Args:
+        case_id: Fraud case UUID string.
+        label: One of 'unlabeled', 'fraud', 'benign'.
+    """
+    client = get_supabase()
+    update_data: dict[str, Any] = {
+        "user_label": label,
+        "labeled_at": datetime.now(UTC).isoformat(),
+    }
+    client.table("fraud_cases").update(update_data).eq("id", case_id).execute()
+
+
+def fetch_fraud_case(case_id: str) -> dict[str, Any] | None:
+    """Fetch a single fraud case row by id.
+
+    Args:
+        case_id: Fraud case UUID string.
+
+    Returns:
+        The case dict, or None if not found.
+    """
+    client = get_supabase()
+    response = (
+        client.table("fraud_cases").select("*").eq("id", case_id).execute()
+    )
+    rows = _extract_list(response.data)
+    return rows[0] if rows else None
+
+
+def list_recent_cases(user_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    """Fetch the most recent fraud cases for a user (DB-backed).
+
+    Args:
+        user_id: User UUID string.
+        limit: Max number of cases to return (default 20).
+
+    Returns:
+        List of fraud case dicts ordered by created_at desc.
+    """
+    client = get_supabase()
+    response = (
+        client.table("fraud_cases")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return _extract_list(response.data)
+
+
 def insert_call_transcript(
     case_id: str, speaker: str, utterance: str, risk_score: int
 ) -> str:
@@ -156,10 +213,30 @@ def fetch_case_context(case_id: str) -> dict:
         .execute()
     )
 
+    entities_raw = _extract_list(entities_res.data)
+
+    # Group entities by type so consumers (e.g. financial worker rule 4) can
+    # match plain lists: {"bank_accounts": [...], "phone_numbers": [...], "urls": [...]}
+    grouped: dict[str, list[str]] = {"bank_accounts": [], "phone_numbers": [], "urls": []}
+    for row in entities_raw:
+        etype = str(row.get("entity_type") or "").upper()
+        evalue = str(row.get("entity_value") or "").strip()
+        if not evalue:
+            continue
+        if etype == "ACCOUNT" or etype == "BANK_ACCOUNT":
+            grouped["bank_accounts"].append(evalue)
+        elif etype == "PHONE":
+            grouped["phone_numbers"].append(evalue)
+        elif etype == "URL" or etype == "WEBSITE":
+            grouped["urls"].append(evalue)
+
     return {
         "transcripts": _extract_list(transcripts_res.data),
         "phishing": _extract_list(phishing_res.data),
-        "entities": _extract_list(entities_res.data),
+        "entities": entities_raw,
+        "bank_accounts": grouped["bank_accounts"],
+        "phone_numbers": grouped["phone_numbers"],
+        "urls": grouped["urls"],
     }
 
 
@@ -484,6 +561,38 @@ def insert_phishing_submission(submission_data: dict[str, Any]) -> str:
     return _extract_id(response.data)
 
 
+def resolve_transaction_uuid(transaction_id: str) -> str | None:
+    """Resolve a TEXT transaction business id to the transactions row's UUID PK.
+
+    ``fraud_cases.transaction_id`` is ``UUID REFERENCES public.transactions(id)``
+    — it stores the transactions table's primary key, NOT the human-readable
+    ``transactions.transaction_id`` TEXT value the app uses everywhere else.
+    Look up the row by the TEXT id and return its UUID so case inserts succeed.
+
+    Returns:
+        The transactions row UUID, or None if no row matches (e.g. the
+        transaction insert was skipped/failed earlier in the trigger flow).
+    """
+    if not transaction_id:
+        return None
+    try:
+        client = get_supabase()
+        resp = (
+            client.table("transactions")
+            .select("id")
+            .eq("transaction_id", transaction_id)
+            .limit(1)
+            .execute()
+        )
+        rows = _extract_list(resp.data)
+        if rows and rows[0].get("id"):
+            return str(rows[0]["id"])
+        return None
+    except Exception as err:  # noqa: BLE001
+        logger.warning(f"resolve_transaction_uuid lookup failed: {err}")
+        return None
+
+
 def insert_transaction(tx_data: dict[str, Any]) -> str:
     """Insert a new transaction record into public.transactions table."""
     try:
@@ -542,6 +651,57 @@ def insert_admin_alert(alert_data: dict[str, Any]) -> str:
     return _extract_id(response.data)
 
 
+def fetch_learned_keywords() -> list[dict[str, Any]]:
+    """Fetch all learned keywords from public.learned_keywords.
+
+    Returns:
+        List of dicts with 'keyword' and 'keyword_type'.
+    """
+    client = get_supabase()
+    response = client.table("learned_keywords").select("*").execute()
+    return _extract_list(response.data)
+
+
+def insert_learned_keyword(case_id: str, keyword: str, keyword_type: str) -> str:
+    """Insert a single learned keyword linked to a fraud case.
+
+    The UNIQUE(keyword, keyword_type) constraint means re-labeling the same
+    keyword is a no-op (the row is simply not re-inserted).
+
+    Args:
+        case_id: Source fraud case UUID string.
+        keyword: The learned phrase / keyword.
+        keyword_type: 'heavy' or 'light'.
+
+    Returns:
+        The inserted record ID, or "" if skipped/duplicate.
+    """
+    keyword = (keyword or "").strip()
+    if not keyword:
+        return ""
+    try:
+        client = get_supabase()
+        response = (
+            client.table("learned_keywords")
+            .insert(
+                cast(
+                    Any,
+                    {
+                        "keyword": keyword,
+                        "keyword_type": keyword_type,
+                        "source_case_id": case_id,
+                    },
+                )
+            )
+            .execute()
+        )
+        return _extract_id(response.data)
+    except Exception as err:  # noqa: BLE001
+        # Duplicate (unique constraint) or RLS hiccup — treat as benign no-op.
+        logger.warning(f"insert_learned_keyword skipped: {err}")
+        return ""
+
+
 def freeze_transaction(
     transaction_id: str,
     freeze_duration_seconds: int = 1800,
@@ -581,3 +741,207 @@ def auto_unfreeze_expired_transactions() -> list[dict[str, Any]]:
     except Exception as err:
         logger.warning(f"Error auto-unfreezing expired transactions: {err}")
         return []
+
+
+# ── Admin operations (real DB-backed) ───────────────────────────
+
+
+def list_all_cases(
+    limit: int = 20,
+    offset: int = 0,
+    risk_tier: str = "all",
+    status: str = "all",
+    trigger_type: str = "all",
+) -> list[dict[str, Any]]:
+    """Fetch fraud cases across ALL users (admin view), newest first.
+
+    Args:
+        limit: Max rows to return.
+        offset: Pagination offset.
+        risk_tier: 'LOW' | 'MEDIUM' | 'HIGH' | 'all'.
+        status: fraud_cases.status value or 'all'.
+        trigger_type: 'TELEMETRY' | 'TRANSACTION' | 'CALL' | 'PHISHING' | 'all'.
+
+    Returns:
+        List of fraud case dicts ordered by created_at desc.
+    """
+    client = get_supabase()
+    query = client.table("fraud_cases").select("*")
+    if risk_tier and risk_tier != "all":
+        query = query.eq("risk_tier", risk_tier)
+    if status and status != "all":
+        query = query.eq("status", status)
+    if trigger_type and trigger_type != "all":
+        query = query.eq("trigger_type", trigger_type)
+    resp = (
+        query.order("created_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    return _extract_list(resp.data)
+
+
+def count_all_cases(
+    risk_tier: str = "all",
+    status: str = "all",
+    trigger_type: str = "all",
+) -> int:
+    """Count fraud cases matching admin filters."""
+    client = get_supabase()
+    query = client.table("fraud_cases").select("id")
+    if risk_tier and risk_tier != "all":
+        query = query.eq("risk_tier", risk_tier)
+    if status and status != "all":
+        query = query.eq("status", status)
+    if trigger_type and trigger_type != "all":
+        query = query.eq("trigger_type", trigger_type)
+    resp = query.execute()
+    return len(_extract_list(resp.data))
+
+
+def fetch_account_by_number(account_number: str) -> dict[str, Any] | None:
+    """Fetch a single account row by its account_number (admin lookup)."""
+    client = get_supabase()
+    resp = (
+        client.table("accounts")
+        .select("*")
+        .eq("account_number", account_number)
+        .limit(1)
+        .execute()
+    )
+    rows = _extract_list(resp.data)
+    return rows[0] if rows else None
+
+
+def update_account_status(
+    account_number: str,
+    status: str,
+    frozen_at: str | None = None,
+    frozen_by: str | None = None,
+    frozen_reason: str | None = None,
+    unfreeze_at: str | None = None,
+) -> None:
+    """Freeze or unfreeze a bank account row.
+
+    Args:
+        account_number: Account number to update.
+        status: 'frozen' or 'active'.
+        frozen_at / frozen_by / frozen_reason / unfreeze_at: Freeze metadata.
+    """
+    client = get_supabase()
+    update_data: dict[str, Any] = {
+        "status": status,
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    if status == "frozen":
+        update_data["frozen_at"] = frozen_at or datetime.now(UTC).isoformat()
+        update_data["frozen_by"] = frozen_by or "admin"
+        update_data["frozen_reason"] = frozen_reason
+        update_data["unfreeze_at"] = unfreeze_at
+    elif status == "active":
+        update_data["unfreeze_at"] = None
+        update_data["frozen_at"] = None
+        update_data["frozen_by"] = None
+        update_data["frozen_reason"] = None
+    client.table("accounts").update(update_data).eq("account_number", account_number).execute()
+
+
+def fetch_all_accounts(limit: int = 500) -> list[dict[str, Any]]:
+    """Fetch account rows (admin list view)."""
+    client = get_supabase()
+    resp = client.table("accounts").select("*").limit(limit).execute()
+    return _extract_list(resp.data)
+
+
+def freeze_transactions_by_sender(
+    sender_account: str, freeze_duration_seconds: int = 1800
+) -> int:
+    """Freeze all pending transactions sent from an account number. Returns count frozen."""
+    client = get_supabase()
+    resp = (
+        client.table("transactions")
+        .select("transaction_id")
+        .eq("sender_account", sender_account)
+        .eq("status", "pending")
+        .execute()
+    )
+    count = 0
+    for tx in _extract_list(resp.data):
+        tx_id = tx.get("transaction_id")
+        if tx_id:
+            freeze_transaction(tx_id, freeze_duration_seconds)
+            count += 1
+    return count
+
+
+def unfreeze_transactions_by_sender(sender_account: str) -> int:
+    """Approve all frozen transactions sent from an account number. Returns count unfrozen."""
+    client = get_supabase()
+    resp = (
+        client.table("transactions")
+        .select("transaction_id")
+        .eq("sender_account", sender_account)
+        .eq("status", "frozen")
+        .execute()
+    )
+    count = 0
+    for tx in _extract_list(resp.data):
+        tx_id = tx.get("transaction_id")
+        if tx_id:
+            update_transaction_status(tx_id, "approved")
+            count += 1
+    return count
+
+
+def list_admin_alerts(
+    status: str = "pending",
+    limit: int = 20,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Fetch admin_alerts rows (optionally filtered by status), newest first."""
+    client = get_supabase()
+    query = client.table("admin_alerts").select("*")
+    if status and status != "all":
+        query = query.eq("status", status)
+    resp = (
+        query.order("created_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    return _extract_list(resp.data)
+
+
+def update_admin_alert(
+    alert_id: str, status: str, admin_note: str | None = None
+) -> None:
+    """Mark an admin alert as reviewed (or dismissed)."""
+    client = get_supabase()
+    update_data: dict[str, Any] = {
+        "status": status,
+        "reviewed_at": datetime.now(UTC).isoformat(),
+        "reviewed_by": "admin",
+    }
+    if admin_note:
+        update_data["admin_note"] = admin_note
+    client.table("admin_alerts").update(update_data).eq("id", alert_id).execute()
+
+
+def fetch_all_cases_for_analytics(limit: int = 2000) -> list[dict[str, Any]]:
+    """Fetch fraud cases for analytics aggregation (admin)."""
+    client = get_supabase()
+    resp = client.table("fraud_cases").select("*").limit(limit).execute()
+    return _extract_list(resp.data)
+
+
+def fetch_all_transactions_for_analytics(limit: int = 2000) -> list[dict[str, Any]]:
+    """Fetch transactions for analytics aggregation (admin)."""
+    client = get_supabase()
+    resp = client.table("transactions").select("*").limit(limit).execute()
+    return _extract_list(resp.data)
+
+
+def fetch_fraud_memory_types() -> list[dict[str, Any]]:
+    """Fetch fraud_type values from fraud_memory for analytics by_fraud_type."""
+    client = get_supabase()
+    resp = client.table("fraud_memory").select("fraud_type").execute()
+    return _extract_list(resp.data)

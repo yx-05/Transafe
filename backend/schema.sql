@@ -92,6 +92,9 @@ CREATE TABLE IF NOT EXISTS public.fraud_cases (
     transaction_id  UUID REFERENCES public.transactions(id),
     caller_number   TEXT,
     phishing_source TEXT,
+    user_label      TEXT NOT NULL DEFAULT 'unlabeled'
+                    CHECK (user_label IN ('unlabeled', 'fraud', 'benign')),
+    labeled_at      TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -102,6 +105,8 @@ CREATE INDEX IF NOT EXISTS idx_fraud_cases_risk_tier
     ON public.fraud_cases (risk_tier);
 CREATE INDEX IF NOT EXISTS idx_fraud_cases_created_at
     ON public.fraud_cases (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fraud_cases_user_label
+    ON public.fraud_cases (user_label, created_at DESC);
 
 -- Add foreign key constraint to transactions for associated_case_id
 DO $$
@@ -188,7 +193,7 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_user_session
     ON public.telemetry_events (user_id, session_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_telemetry_created_at
-    ON telemetry.telemetry_events (created_at DESC);
+    ON public.telemetry_events (created_at DESC);
 
 -- ── 12. FRAUD_MEMORY (pgvector) ─────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.fraud_memory (
@@ -207,7 +212,7 @@ CREATE TABLE IF NOT EXISTS public.fraud_memory (
     risk_tier       TEXT NOT NULL DEFAULT 'HIGH'
                     CHECK (risk_tier IN ('LOW', 'MEDIUM', 'HIGH')),
     source          TEXT NOT NULL DEFAULT 'user_report'
-                    CHECK (source IN ('user_report', 'system_detected')),
+                    CHECK (source IN ('user_report', 'system_detected', 'user_confirmed')),
     language        TEXT NOT NULL DEFAULT 'en'
                     CHECK (language IN ('en', 'ms')),
     embedding       vector(768),
@@ -264,3 +269,35 @@ $$;
 
 -- ── 14. AUTH: Add pin_hash to accounts ───────────────────────────
 ALTER TABLE public.accounts ADD COLUMN IF NOT EXISTS pin_hash TEXT;
+
+-- ── 15. LEARNED_KEYWORDS (adaptive playbook-merge store) ─────────
+CREATE TABLE IF NOT EXISTS public.learned_keywords (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    keyword         TEXT NOT NULL,
+    keyword_type    TEXT NOT NULL CHECK (keyword_type IN ('heavy', 'light')),
+    source_case_id  UUID REFERENCES public.fraud_cases(id) ON DELETE CASCADE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (keyword, keyword_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_learned_keywords_type
+    ON public.learned_keywords (keyword_type);
+
+-- ── 16. UPGRADE existing databases (idempotent; no-op on fresh installs) ──
+-- NOTE: CREATE TABLE IF NOT EXISTS above is a no-op when fraud_cases /
+-- fraud_memory already exist, so these ALTERs bring existing tables up
+-- to date. Safe to run on both fresh and existing databases.
+
+ALTER TABLE public.fraud_cases
+    ADD COLUMN IF NOT EXISTS user_label TEXT NOT NULL DEFAULT 'unlabeled'
+        CHECK (user_label IN ('unlabeled', 'fraud', 'benign'));
+
+ALTER TABLE public.fraud_cases
+    ADD COLUMN IF NOT EXISTS labeled_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_fraud_cases_user_label
+    ON public.fraud_cases (user_label, created_at DESC);
+
+ALTER TABLE public.fraud_memory DROP CONSTRAINT IF EXISTS fraud_memory_source_check;
+ALTER TABLE public.fraud_memory ADD CONSTRAINT fraud_memory_source_check
+    CHECK (source IN ('user_report', 'system_detected', 'user_confirmed'));

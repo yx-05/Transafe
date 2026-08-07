@@ -1,9 +1,13 @@
 """Tavily search service targeting Malaysian fraud & banking portals."""
 
+import logging
 import os
 from typing import Any
 
+from dotenv import load_dotenv
 from tavily import TavilyClient  # type: ignore[import-untyped]
+
+logger = logging.getLogger(__name__)
 
 REGULATORY_DOMAINS: list[str] = [
     "bnm.gov.my",  # Bank Negara Malaysia Financial Consumer Alert List
@@ -31,25 +35,18 @@ GENERIC_TERMS: set[str] = {
 }
 
 
-def tavily_search(entities: list[str]) -> list[dict[str, Any]]:
-    """Query Tavily Search API with multi-tiered domain scanning for BNM/SC and community forums."""
-    if not entities:
-        return []
+def _run_tiered_search(
+    client: TavilyClient, clean_entities: list[str], query: str
+) -> tuple[list[dict[str, Any]], bool]:
+    """Run the multi-tier Tavily search with a single client (one API key).
 
-    clean_entities = [
-        e.strip()
-        for e in entities
-        if e and e.strip() and e.strip().lower() not in GENERIC_TERMS
-    ]
-    if not clean_entities:
-        return []
-
-    query = " ".join(clean_entities)
-    api_key = os.getenv("TAVILY_API_KEY", "tvly_dummy")
-    client = TavilyClient(api_key=api_key)
-
+    Returns ``(final_hits, had_error)`` so the caller can rotate keys when the
+    search failed (rate limit / invalid key). A legitimate empty result (no scam
+    evidence found) is NOT an error.
+    """
     combined_results: list[dict[str, Any]] = []
     seen_urls = set()
+    had_error = False
 
     # Determine if query contains specific non-numeric corporate/scheme brand terms
     has_brand_term = any(not token.replace("-", "").isdigit() for token in clean_entities)
@@ -72,7 +69,7 @@ def tavily_search(entities: list[str]) -> list[dict[str, Any]]:
                 item["content"] = str(snippet_text)[:800]
                 combined_results.append(item)
     except Exception:
-        pass
+        had_error = True
 
     # Tier 2: Query Police Registries & Community Scam Forums (PDRM & Lowyat)
     try:
@@ -91,7 +88,7 @@ def tavily_search(entities: list[str]) -> list[dict[str, Any]]:
                 item["content"] = str(snippet_text)[:800]
                 combined_results.append(item)
     except Exception:
-        pass
+        had_error = True
 
     # Tier 3: Unconstrained general search if domain-restricted searches returned no results OR low entity relevance
     entity_tokens = [
@@ -121,16 +118,7 @@ def tavily_search(entities: list[str]) -> list[dict[str, Any]]:
                     item["content"] = str(snippet_text)[:800]
                     combined_results.append(item)
         except Exception:
-            pass
-
-    # Sort and structure final payload: Guarantee Slot 1 = Official Regulator Hit (BNM/SC) if available, followed by top news/investigations
-    entity_tokens = [
-        t.lower()
-        for ent in clean_entities
-        for t in ent.split()
-        if len(t) > 2 and not t.replace("-", "").isdigit()
-    ]
-
+            had_error = True
     def hit_relevance_score(item: dict[str, Any]) -> int:
         text = f"{item.get('title', '')} {item.get('snippet', '')}".lower()
         score = 0
@@ -156,4 +144,94 @@ def tavily_search(entities: list[str]) -> list[dict[str, Any]]:
         if len(final_hits) >= 3:
             break
 
-    return final_hits
+    return final_hits, had_error
+
+
+def get_tavily_api_keys() -> list[str]:
+    """Gather all available Tavily API keys dynamically from environment & .env files.
+
+    Mirrors the Groq/Deepgram rotation pools: reads ``TAVILY_API_KEY``,
+    ``TAVILY_API_KEY_1..N`` and comma-separated ``TAVILY_API_KEYS``.
+    """
+    # Ensure dotenv is loaded
+    load_dotenv()
+
+    keys: list[str] = []
+
+    # 1. Check explicit environment variables
+    for var in (
+        "TAVILY_API_KEY",
+        "TAVILY_API_KEY_1",
+        "TAVILY_API_KEY_2",
+        "TAVILY_API_KEY_3",
+        "TAVILY_API_KEY_4",
+        "TAVILY_API_KEY_5",
+        "TAVILY_API_KEYS",
+    ):
+        val = os.getenv(var)
+        if val and val.strip():
+            # Handle comma-separated keys if present
+            for k in val.split(","):
+                k_clean = k.strip()
+                if k_clean and k_clean not in keys and k_clean.startswith("tvly"):
+                    keys.append(k_clean)
+
+    # 2. Dynamic scan of os.environ for any TAVILY_API_KEY*
+    for env_k, env_v in os.environ.items():
+        if env_k.startswith("TAVILY_API_KEY") and env_v and env_v.strip():
+            for k in env_v.split(","):
+                k_clean = k.strip()
+                if k_clean and k_clean not in keys and k_clean.startswith("tvly"):
+                    keys.append(k_clean)
+
+    if not keys:
+        keys.append("tvly_dummy")
+
+    return keys
+
+
+def tavily_search(entities: list[str]) -> list[dict[str, Any]]:
+    """Query Tavily Search API with multi-tiered domain scanning for BNM/SC and community forums.
+
+    Rotates through the ``TAVILY_API_KEY`` pool (``TAVILY_API_KEY``, ``_1``..``_N``) when
+    a key fails (e.g. 429 rate limit / invalid key), mirroring the Groq/Deepgram rotation.
+    A legitimate no-match result does NOT rotate — empty is a valid answer.
+    """
+    if not entities:
+        return []
+
+    clean_entities = [
+        e.strip()
+        for e in entities
+        if e and e.strip() and e.strip().lower() not in GENERIC_TERMS
+    ]
+    if not clean_entities:
+        return []
+
+    query = " ".join(clean_entities)
+
+    keys = get_tavily_api_keys()
+    last_error: Exception | None = None
+
+    for idx, api_key in enumerate(keys):
+        try:
+            client = TavilyClient(api_key=api_key)
+            hits, had_error = _run_tiered_search(client, clean_entities, query)
+            if hits:
+                return hits
+            if had_error:
+                # Key errored (rate limit / transient) — try the next one
+                logger.warning(
+                    "Tavily key #%d errored during search, rotating to next key...", idx + 1
+                )
+                continue
+            # Legitimate no-match — do NOT rotate
+            return []
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            logger.warning("Tavily search failed with key #%d: %s", idx + 1, exc)
+            continue
+
+    if last_error is not None:
+        logger.warning("All Tavily API keys failed; last error: %s", last_error)
+    return []

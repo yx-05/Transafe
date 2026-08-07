@@ -1,12 +1,19 @@
 """Unit tests for TranSafe Module 4 Worker Agents."""
 
 import json
+import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from src.agents.prompts import build_autotalk_response_prompt
 from src.agents.state import GraphState, WorkerFinding
 from src.agents.workers.financial import financial_worker_node
-from src.agents.workers.phishing import analyze_call_transcript, phishing_worker_node
+from src.agents.workers.phishing import (
+    _build_phishing_system_prompt,
+    analyze_call_transcript,
+    get_phishing_playbook_data,
+    phishing_worker_node,
+)
 from src.agents.workers.phone import phone_worker_node
 from src.agents.workers.research import research_worker_node
 from src.agents.workers.telemetry import telemetry_worker_node
@@ -119,6 +126,45 @@ def test_financial_worker_case_context_override(
     assert any("matches active call transcript" in ev for ev in finding["evidence"])
 
 
+@patch("src.agents.workers.financial.fetch_user_transaction_history", new_callable=MagicMock)
+@patch("src.agents.workers.financial.llm")
+def test_financial_worker_case_context_evidence_when_llm_scores_high(
+    mock_llm: MagicMock, mock_history: MagicMock
+):
+    """Assert the CRITICAL case-context evidence is inserted even when the LLM
+    already returns a high score (the coercion match must stay visible downstream)."""
+    mock_history.return_value = {"avg_amount": 200.0, "known_recipients": ["1111-2222"]}
+
+    # LLM returns a high score WITHOUT the coercion evidence
+    mock_response = MagicMock()
+    mock_response.content = (
+        '{"score": 96, "confidence": 0.97, "evidence": ["Round amount"]}'
+    )
+    mock_llm.invoke.return_value = mock_response
+
+    state: GraphState = {
+        "trigger_type": "TRANSACTION",
+        "trigger_payload": {
+            "transaction": {
+                "sender_account": "1234-5678",
+                "recipient_account": "7653-1234-5678-9012",
+                "amount": 5000.0,
+            }
+        },
+        "associated_case_context": {
+            "bank_accounts": ["7653-1234-5678-9012"],
+            "transcripts": ["Scammer told me to transfer to 7653-1234-5678-9012"],
+        },
+    }
+
+    res = financial_worker_node(state)
+    finding = res["financial_finding"]
+
+    assert finding["worker"] == "financial"
+    assert finding["score"] >= 98
+    assert any("matches active call transcript" in ev for ev in finding["evidence"])
+
+
 # ── 3. Research Worker Tests ──
 
 @patch("src.agents.workers.research.tavily_search")
@@ -150,42 +196,25 @@ def test_research_worker_executes_tavily_fallback_low_score(
     assert any("Tavily web search" in ev for ev in finding["evidence"])
 
 
-@patch("src.agents.workers.research.add_fraud_memory")
-@patch("src.agents.workers.research.llm")
-def test_research_worker_ingest_mode(mock_llm: MagicMock, mock_add_memory: MagicMock):
-    """Verify research_worker_node handles INGEST mode for REPORT trigger."""
-    mock_llm_response = MagicMock()
-    mock_llm_response.content = "Victim reported Macau scam caller pretending to be Bank Negara."
-    mock_llm.invoke.return_value = mock_llm_response
-
-    state: GraphState = {
-        "case_id": "case-report-1",
-        "trigger_type": "REPORT",
-        "trigger_payload": {
-            "description": "Scammer called asking for RM 10,000",
-            "fraud_type": "macau_scam",
-            "phone_numbers": ["0161234567"],
-        },
-    }
-
-    res = research_worker_node(state)
-    finding = res["research_finding"]
-
-    mock_add_memory.assert_called_once()
-    assert finding["score"] == 0
-    assert any("Successfully ingested fraud report" in ev for ev in finding["evidence"])
-
-
 # ── 4. Phishing Analyst Worker Tests ──
 
 @patch("src.agents.workers.phishing.search_fraud_memory")
+@patch("src.agents.workers.phishing.analyze_image", new_callable=MagicMock)
 @patch("src.agents.workers.phishing.extract_text_from_image", new_callable=MagicMock)
 @patch("src.agents.workers.phishing.llm")
 @patch("src.agents.workers.phishing.tavily_search")
 def test_phishing_worker_returns_extracted_entities(
-    mock_tavily: MagicMock, mock_llm: MagicMock, mock_ocr: MagicMock, mock_search_memory: MagicMock
+    mock_tavily: MagicMock,
+    mock_llm: MagicMock,
+    mock_ocr: MagicMock,
+    mock_analyze_image: MagicMock,
+    mock_search_memory: MagicMock,
 ):
     """Assert phishing_worker_node returns extracted entities in state updates."""
+    mock_analyze_image.return_value = {
+        "extracted_text": "URGENT: Verify your account at http://cimb-secure.xyz or call 0123456789",
+        "description": "Urgency banner and lookalike bank login form",
+    }
     mock_ocr.return_value = "URGENT: Verify your account at http://cimb-secure.xyz or call 0123456789"
     mock_search_memory.return_value = []
     mock_tavily.return_value = []
@@ -211,6 +240,52 @@ def test_phishing_worker_returns_extracted_entities(
     finding = res["phishing_finding"]
     assert finding["worker"] == "phishing"
     assert finding["score"] >= 40
+
+
+@patch("src.agents.workers.phishing.search_fraud_memory")
+@patch("src.agents.workers.phishing.analyze_image", new_callable=MagicMock)
+@patch("src.agents.workers.phishing.llm")
+@patch("src.agents.workers.phishing.tavily_search")
+def test_phishing_worker_flags_credential_harvesting_page(
+    mock_tavily: MagicMock, mock_llm: MagicMock, mock_analyze_image: MagicMock, mock_search_memory: MagicMock
+):
+    """PayPal lookalike login page must score HIGH deterministically.
+
+    Pure rule pass (LLM fails) so the score comes from the new
+    credential-harvesting / brand-impersonation / embedded-URL signals, not
+    from the LLM — this is the fallback that fires during rate limits.
+    """
+    mock_analyze_image.return_value = {
+        "extracted_text": (
+            "Log in to your PayPal Account\nDangerous\n"
+            "www.kmacraeandson.co.uk/Online-Support\nEmail\nPassword\nLog In"
+        ),
+        "description": "Phishing page mimicking the PayPal login interface",
+    }
+    mock_llm.invoke.side_effect = Exception("LLM fallback")
+    mock_search_memory.return_value = []
+    mock_tavily.return_value = []
+
+    state: GraphState = {
+        "trigger_type": "PHISHING",
+        "trigger_payload": {
+            "material": {
+                "content_type": "IMAGE",
+                "content": "ZmFrZS1pbWFnZS1ieXRlcw==",
+                "source": "SMS",
+            }
+        },
+        "status_messages": [],
+    }
+
+    res = phishing_worker_node(state)
+
+    finding = res["phishing_finding"]
+    assert finding["score"] >= 75
+    assert any("Credential-harvesting" in ev for ev in finding["evidence"])
+    assert any("Brand impersonation" in ev for ev in finding["evidence"])
+    assert res["phishing_ocr_text"] != ""
+    assert res["phishing_image_description"] != ""
 
 
 @patch("src.agents.workers.phishing.search_fraud_memory")
@@ -242,6 +317,38 @@ def test_analyze_call_transcript_empty_returns_benign():
     assert res["phishing_finding"]["score"] == 0
     assert res["extracted_entities"] == {}
     assert res["research"]["queried"] is False
+
+
+@patch("src.agents.workers.phishing.tavily_search")
+@patch("src.agents.workers.phishing.search_fraud_memory")
+@patch("src.agents.workers.phishing.llm")
+def test_analyze_call_transcript_scores_friend_money_scam_high(
+    mock_llm: MagicMock, mock_search_memory: MagicMock, mock_tavily: MagicMock
+):
+    """Friend-from-Thailand money-demand transcript must score HIGH (>= 70).
+
+    Pure rule pass (LLM fails) so the score comes from the financial-demand /
+    social-engineering keyword analysis, and the AUTO_TALK agent's own probe
+    wording must not inflate the verdict.
+    """
+    mock_llm.invoke.side_effect = Exception("LLM fallback")
+    mock_search_memory.return_value = []
+    mock_tavily.return_value = []
+
+    transcript = [
+        {"speaker": "SCAMMER", "text": "Hello! I'm your friend from Thailand."},
+        {"speaker": "TRANSAFE_AI", "text": "I'm confused. Which department are you from?"},
+        {"speaker": "SCAMMER", "text": "We need to invest this $100,000 together."},
+        {"speaker": "SCAMMER", "text": "Please transfer me a thousand dollars for the investment."},
+    ]
+
+    res = analyze_call_transcript(transcript)
+
+    finding = res["phishing_finding"]
+    assert finding["score"] >= 70, f"expected HIGH, got {finding['score']}"
+    assert any("transfer" in ev.lower() for ev in finding["evidence"])
+    # The agent's own probe wording must not appear in the scored evidence
+    assert "which department" not in " ".join(finding["evidence"]).lower()
 
 
 @patch("src.agents.workers.phishing.tavily_search")
@@ -331,6 +438,43 @@ def test_analyze_call_transcript_heuristic_fallback_on_planner_failure(
     assert "0123456789" in res["research"]["queries"]
     assert res["research"]["web_hits"] == []
     assert res["phishing_finding"]["worker"] == "phishing"
+
+
+# ── 4b. Phishing Detection Playbook Tests ──
+
+def test_phishing_playbook_covers_legacy_rule_keywords():
+    """The playbook skill must keep covering the legacy rule keywords.
+
+    Guards against silent drift: if someone trims a keyword from the playbook
+    table, this test fails even though every other test still passes.
+    """
+    data = get_phishing_playbook_data()
+    for kw in ["transfer", "safe account", "otp", "card pin", "top up", "send money", "remit"]:
+        assert kw in data["heavy"], f"playbook missing heavy keyword: {kw}"
+    for kw in ["friend", "arrest", "investment", "right now", "don't hang up", "must not disconnect"]:
+        assert kw in data["light"], f"playbook missing light keyword: {kw}"
+
+
+@patch("src.agents.workers.phishing.get_phishing_playbook")
+def test_phishing_playbook_falls_back_to_defaults(mock_get_playbook: MagicMock):
+    """Missing/malformed playbook falls back to built-in defaults — never degrades."""
+    mock_get_playbook.side_effect = FileNotFoundError("skill file not found")
+    phishing_mod = sys.modules["src.agents.workers.phishing"]
+    phishing_mod._PHISHING_PLAYBOOK_CACHE = None
+    try:
+        data = get_phishing_playbook_data()
+        assert "transfer" in data["heavy"]
+        assert "friend" in data["light"]
+        assert data["guidance"]
+    finally:
+        phishing_mod._PHISHING_PLAYBOOK_CACHE = None
+
+
+def test_phishing_system_prompt_includes_playbook_guidance():
+    """The LLM system prompt embeds the playbook's archetype guidance."""
+    prompt = _build_phishing_system_prompt()
+    assert "Scam Archetype Playbook" in prompt
+    assert "Friend / Relative Emergency" in prompt
 
 
 # ── 5. Phone Worker Tests ──
@@ -545,6 +689,21 @@ def test_autotalk_responder_hangup_on_confirmed_signal(mock_llm: MagicMock):
     assert reply["signal_detected"] is True
     assert reply["suspicion_delta"] == 40
     assert "ending this call" in reply["reply"]
+
+
+def test_autotalk_prompt_dampens_suspicion_score():
+    """The AUTO_TALK prompt must cap the cumulative suspicion at 60 and mark it
+    informational, so the LLM doesn't hang up based on the score alone."""
+    prompt = build_autotalk_response_prompt(
+        transcript=[{"speaker": "SCAMMER", "text": "Hello?"}],
+        anchor_questions=[],
+        dialogue_guide="",
+        suspicion=100,
+        aq_progress={"asked": []},
+    )
+    assert "CUMULATIVE SUSPICION SCORE: 60 / 100" in prompt
+    assert "informational only" in prompt
+    assert "100 / 100" not in prompt
 
 
 def test_autotalk_mode_uses_anchor_skill_evidence():

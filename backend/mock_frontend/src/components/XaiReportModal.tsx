@@ -1,6 +1,6 @@
 import React from 'react';
 import type { XaiReport } from '../types/api';
-import { AlertTriangle, CheckCircle, ShieldAlert, Cpu, FileText } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Link2, ShieldAlert, Cpu, FileText } from 'lucide-react';
 
 interface XaiReportModalProps {
   report: XaiReport | null;
@@ -46,6 +46,18 @@ export const XaiReportModal: React.FC<XaiReportModalProps> = ({ report, onClose 
               {report.case_id && <span><strong>Case ID:</strong> {report.case_id}</span>}
             </div>
           </div>
+
+          {report.associated_case_id && (
+            <div className="linked-case-card">
+              <h4><Link2 size={16} /> Linked Case Context</h4>
+              <p>
+                This analysis accounted for the selected case{' '}
+                <strong className="case-id-chip">{report.associated_case_id}</strong>.
+                Its call transcripts and extracted accounts were cross-checked
+                against this transfer by the agents below.
+              </p>
+            </div>
+          )}
 
           {report.recommendation && (
             <div className="xai-recommendation">

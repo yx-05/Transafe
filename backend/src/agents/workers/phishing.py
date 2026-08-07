@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -15,11 +16,12 @@ from src.agents.llm import extract_json_object, invoke_groq_with_key_rotation
 from src.agents.prompts import (
     build_phishing_analysis_prompt,
     build_phishing_research_planner_prompt,
+    get_phishing_playbook,
 )
 from src.agents.state import GraphState, WorkerFinding
 from src.db.vector_store import search_fraud_memory
 from src.services.tavily import tavily_search
-from src.services.vision import extract_text_from_image
+from src.services.vision import analyze_image, extract_text_from_image
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,7 @@ Look for the following signals:
 2. Urgent/Threatening Language: Claiming account suspension, immediate blocks, packages held, or legal actions unless action is taken in hours.
 3. Call-to-Action Lookalikes: Providing links that mimic official bank domains or asking user to call suspicious numbers.
 4. Information Harvester: Requesting login credentials, card numbers, PINs, or OTPs.
+5. Social Engineering / Financial Fraud: Impersonating a friend, relative, or authority figure and pressing for urgent money transfers, "investment" payments, card details, OTPs, or forbidding the victim from hanging up.
 
 Respond in strict JSON format:
 {
@@ -81,6 +84,152 @@ Respond ONLY in strict JSON format:
 }"""
 
 
+# ---------------------------------------------------------------------------
+# Phishing Detection Playbook (single source of truth)
+# ---------------------------------------------------------------------------
+# backend/skills/phishing_detection_playbook.md drives BOTH detection paths:
+#   - the deterministic rule engine reads its keyword columns
+#   - the LLM system prompt reads its archetype guidance columns
+# If the skill file is missing or malformed we fall back to the built-in
+# keyword lists below so the pipeline never degrades.
+_DEFAULT_HEAVY_DEMAND = [
+    "transfer", "wire", "bank account", "safe account", "akaun selamat",
+    "otp", "card number", "card password", "card pin", "send money",
+    "deposit", "withdraw", "top up", "topup", "remit",
+]
+_DEFAULT_LIGHT_DEMAND = [
+    "don't hang up", "do not hang up", "must not disconnect", "arrest",
+    "jail", "investment", "invest", "friend", "relative", "sister",
+    "brother", "urgent", "right now", "asap", "immediately", "pay",
+    "payment", "money", "cash", "redeem", "prize", "won",
+]
+_PLAYBOOK_DEFAULT_GUIDANCE = """- **Friend / Relative Emergency**: Impersonating a friend or relative in distress and pressing for an urgent money transfer.
+- **Bank Impersonation**: Pretending to be a bank and demanding funds be moved to a "safe account", or harvesting card / OTP details.
+- **Government / Authority**: Impersonating police, tax, or court and threatening arrest unless a fine or bail is paid immediately."""
+
+_PHISHING_PLAYBOOK_CACHE: dict[str, Any] | None = None
+_PHISHING_PLAYBOOK_CACHE_TS: float = 0.0
+_LEARNED_MERGE_TTL_SECONDS: float = 45.0
+
+
+def _parse_phishing_playbook(text: str) -> dict[str, Any]:
+    """Parse the Detection Archetypes table into keyword lists + LLM guidance.
+
+    Expected columns:
+        | ID | Archetype | Typical script phrases | Heavy money-demand keywords |
+        | Light social-engineering / urgency keywords | LLM guidance |
+
+    Returns dict with keys ``heavy``, ``light``, ``guidance``. Malformed rows
+    are skipped.
+    """
+    heavy: list[str] = []
+    light: list[str] = []
+    guidance: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("|") or "---" in line:
+            continue
+        parts = [p.strip() for p in line.split("|")[1:-1]]
+        if len(parts) < 6:
+            continue
+        raw_id = parts[0].replace("*", "").strip()
+        if raw_id.upper().startswith("ID") or not raw_id:
+            continue
+        heavy += [k.strip().lower() for k in parts[3].split(",") if k.strip()]
+        light += [k.strip().lower() for k in parts[4].split(",") if k.strip()]
+        if parts[5].strip():
+            guidance.append(f"- **{parts[1].strip()}**: {parts[5].strip()}")
+
+    return {
+        "heavy": sorted(set(heavy)),
+        "light": sorted(set(light)),
+        "guidance": "\n".join(guidance),
+    }
+
+
+def get_phishing_playbook_data() -> dict[str, Any]:
+    """Load (once) and parse the phishing detection playbook skill.
+
+    Returns a dict with keys ``heavy`` (list[str]), ``light`` (list[str]),
+    ``guidance`` (str) and ``raw`` (str). Falls back to built-in defaults if
+    the skill file is missing or unparseable.
+
+    User-confirmed ``learned_keywords`` (from adaptive labeling) are merged
+    into the heavy/light keyword lists with a short TTL so new scam tactics
+    take effect within about a minute.
+    """
+    global _PHISHING_PLAYBOOK_CACHE, _PHISHING_PLAYBOOK_CACHE_TS
+    if _PHISHING_PLAYBOOK_CACHE is None or _PHISHING_PLAYBOOK_CACHE_TS == 0.0:
+        try:
+            raw = get_phishing_playbook()
+            parsed = _parse_phishing_playbook(raw)
+            if not parsed["heavy"] or not parsed["light"]:
+                raise ValueError("playbook table has no keyword rows")
+            parsed["raw"] = raw
+            parsed["_learned_merged"] = False
+            _PHISHING_PLAYBOOK_CACHE = parsed
+            _PHISHING_PLAYBOOK_CACHE_TS = time.monotonic()
+        except Exception as err:  # noqa: BLE001
+            logger.debug(f"Phishing playbook unavailable, using built-in defaults: {err}")
+            _PHISHING_PLAYBOOK_CACHE = {
+                "heavy": list(_DEFAULT_HEAVY_DEMAND),
+                "light": list(_DEFAULT_LIGHT_DEMAND),
+                "guidance": _PLAYBOOK_DEFAULT_GUIDANCE,
+                "raw": "",
+                "_learned_merged": False,
+            }
+            _PHISHING_PLAYBOOK_CACHE_TS = time.monotonic()
+
+    # Re-merge learned keywords every TTL window so labels propagate quickly.
+    if not _PHISHING_PLAYBOOK_CACHE.get("_learned_merged") or (
+        time.monotonic() - _PHISHING_PLAYBOOK_CACHE_TS > _LEARNED_MERGE_TTL_SECONDS
+    ):
+        _PHISHING_PLAYBOOK_CACHE = _merge_learned_keywords(_PHISHING_PLAYBOOK_CACHE)
+        _PHISHING_PLAYBOOK_CACHE_TS = time.monotonic()
+
+    return _PHISHING_PLAYBOOK_CACHE
+
+
+def _merge_learned_keywords(playbook: dict[str, Any]) -> dict[str, Any]:
+    """Union learned_keywords rows (heavy/light) into the playbook keyword lists."""
+    merged = dict(playbook)
+    merged["_learned_merged"] = True
+    try:
+        from src.db.supabase import fetch_learned_keywords
+
+        rows = fetch_learned_keywords()
+        if not rows:
+            return merged
+        heavy = set(str(k).lower().strip() for k in (merged.get("heavy") or []))
+        light = set(str(k).lower().strip() for k in (merged.get("light") or []))
+        for row in rows:
+            kw = str(row.get("keyword") or "").strip().lower()
+            ktype = str(row.get("keyword_type") or "light").strip().lower()
+            if not kw:
+                continue
+            if ktype == "heavy":
+                heavy.add(kw)
+            else:
+                light.add(kw)
+        merged["heavy"] = sorted(heavy)
+        merged["light"] = sorted(light)
+        logger.debug(
+            f"playbook merged with learned_keywords: heavy={len(heavy)} light={len(light)}"
+        )
+    except Exception as err:  # noqa: BLE001
+        logger.debug(f"learned keyword merge skipped: {err}")
+    return merged
+
+
+def _build_phishing_system_prompt() -> str:
+    """PHISHING_SYSTEM_PROMPT + the playbook's archetype guidance section."""
+    base = PHISHING_SYSTEM_PROMPT
+    guidance = (get_phishing_playbook_data().get("guidance") or "").strip()
+    if not guidance:
+        return base
+    return base + "\n\n## Scam Archetype Playbook (TranSafe skill)\n" + guidance
+
+
 def _extract_entities_from_text(text: str) -> dict[str, list[str]]:
     """Regex entity extractor for phone numbers, URLs, and bank account candidates."""
     phones = re.findall(r"\+?60\d{8,10}|\b0\d{8,10}\b", text)
@@ -112,10 +261,102 @@ def _rule_based_phishing_analysis(
         score += len(found_kw) * 15
         evidence.append(f"Detected suspicious keywords: {', '.join(found_kw)}")
 
+    # Financial-demand / social-engineering signals — common in live-call
+    # transcripts (friend/relative scams, urgent money movement, OTP/card
+    # harvesting, hangup coercion). Distinct from bank-impersonation phishing.
+    # Keywords come from the phishing detection playbook skill (single source
+    # of truth shared with the LLM prompt); defaults apply if it is missing.
+    playbook = get_phishing_playbook_data()
+    heavy_demand = playbook["heavy"]
+    light_demand = playbook["light"]
+    heavy_hits = [kw for kw in heavy_demand if kw in lower_text]
+    light_hits = [kw for kw in light_demand if kw in lower_text]
+    amount_hit = bool(
+        re.search(
+            r"\b(rm|usd|us\$|\$|myr)\s?\d{2,}|"
+            r"\d{2,}\s?(?:dollars?|ringgit|bucks|thousand)|"
+            r"(?:thousand|million|hundred)\s?(?:dollars?|ringgit|bucks|rm)?",
+            lower_text,
+        )
+    )
+    if heavy_hits:
+        # A bare mention ("can you transfer the file?") is weak; corroboration
+        # from urgency / coercion / social-engineering / an amount is the
+        # classic scam pattern and pushes the verdict decisively HIGH.
+        corroborated = bool(light_hits) or amount_hit
+        score += len(heavy_hits) * (35 if corroborated else 15)
+        evidence.append(
+            f"Financial demand detected ({'with corroborating signals' if corroborated else 'mention only'}): "
+            f"{', '.join(heavy_hits)}"
+        )
+    if light_hits:
+        score += len(light_hits) * 10
+        evidence.append(f"Social-engineering / urgency signals: {', '.join(light_hits)}")
+
     # URL anomalies (.xyz, .top, unencrypted http)
     if "http://" in lower_text or ".xyz" in lower_text or ".top" in lower_text or ".site" in lower_text:
         score += 35
         evidence.append("Suspicious URL TLD or unencrypted HTTP link detected")
+
+    # Credential-harvesting / lookalike-login signals — covers phishing pages
+    # mimicking PayPal/Apple/Netflix/bank login screens (email+password
+    # fields, "verify your account" flows) that the bank-impersonation
+    # keywords above do not match.
+    login_keywords = [
+        "password", "log in", "login", "sign in", "signin", "sign into",
+        "verify your account", "verify account", "account locked",
+        "account has been locked", "secure your account",
+        "update your information", "confirm your identity",
+        "email address", "re-enter", "credentials", "deactivated",
+        "unusual activity", "suspicious activity",
+    ]
+    login_hits = [kw for kw in login_keywords if kw in lower_text]
+    if login_hits:
+        score += len(login_hits) * 12
+        evidence.append(
+            f"Credential-harvesting login-form signals: {', '.join(login_hits)}"
+        )
+
+    # Brand impersonation: a well-known brand alongside login-form signals
+    # strongly suggests a lookalike credential-harvesting page.
+    brand_keywords = [
+        "paypal", "apple", "icloud", "netflix", "microsoft", "outlook",
+        "dbs", "citibank", "hsbc", "standard chartered", "shopee",
+        "lazada", "grab", "facebook", "instagram", "whatsapp", "wechat",
+        "maybank", "cimb", "rhb", "bank negara", "pos malaysia",
+    ]
+    brand_hits = [b for b in brand_keywords if b in lower_text]
+    if brand_hits and login_hits:
+        score += 25
+        evidence.append(
+            f"Brand impersonation ({', '.join(brand_hits)}) combined with "
+            "login-form signals — classic credential phishing"
+        )
+
+    # Embedded URL/domain that is NOT the claimed brand's own domain — e.g. a
+    # PayPal login page hosted on an unrelated domain (kmacraeandson.co.uk).
+    # Bare URLs are suspicious even without a brand mention.
+    embedded_urls = [
+        u.rstrip(".,;:!?)\"]'")
+        for u in re.findall(r"https?://[^\s]+|www\.[^\s]+", lower_text)
+    ]
+    if embedded_urls:
+        suspicious_urls = [
+            u for u in embedded_urls
+            if not brand_hits
+            or not any(f"{b}." in u or f"/{b}." in u for b in brand_hits)
+        ]
+        if suspicious_urls:
+            score += 25
+            evidence.append(
+                "Embedded link/domain unrelated to the claimed brand: "
+                f"{', '.join(suspicious_urls[:3])}"
+            )
+
+    # Browser security warning text captured in the screenshot.
+    if "dangerous" in lower_text:
+        score += 20
+        evidence.append("Browser 'Dangerous' security warning present in the page")
 
     # Vector memory hits
     if RAG_hits:
@@ -276,7 +517,7 @@ def _final_verdict_with_web(
             source, content, web_results=web_results
         )
         messages = [
-            SystemMessage(content=PHISHING_SYSTEM_PROMPT),
+            SystemMessage(content=_build_phishing_system_prompt()),
             HumanMessage(content=prompt_text),
         ]
         llm_response = llm.invoke(messages)
@@ -325,7 +566,10 @@ def phishing_worker_node(
              runs ``tavily_search``, then re-runs the verdict with web evidence.
     """
     payload = state.get("trigger_payload") or {}
-    phish_material = payload.get("phishing_material") or payload
+    # Canonical payload shape is `material` (FastAPI PhishingTriggerRequest).
+    # Fall back to the legacy `phishing_material` key (scammer simulator) and
+    # finally to the flat payload (unit-test fixtures) so every caller works.
+    phish_material = payload.get("material") or payload.get("phishing_material") or payload
 
     source = str(phish_material.get("source_type") or phish_material.get("content_type") or "TEXT").upper()
     raw_content = str(phish_material.get("content", ""))
@@ -349,18 +593,39 @@ def phishing_worker_node(
                 "queries": [],
                 "web_hits": [],
             },
+            "phishing_ocr_text": "",
+            "phishing_image_description": "",
         }
 
-    # Stage 1: Groq Vision OCR if IMAGE source
-    if source in ("IMAGE", "SCREENSHOT") and raw_content:
+    # Stage 1: image analysis for IMAGE material — qwen3.6-27b extracts the
+    # text AND describes visual phishing indicators (fake branding, urgency
+    # banners, lookalike login forms, QR codes). Falls back to Groq llama vision
+    # OCR, then to the raw content.
+    is_image = source in ("IMAGE", "SCREENSHOT")
+    image_analysis: dict[str, str] = {}
+    if is_image and raw_content:
         try:
-            ocr_res = extract_text_from_image(raw_content)
-            if inspect.isawaitable(ocr_res):
-                analysis_content = raw_content
-            elif isinstance(ocr_res, str) and ocr_res.strip():
-                analysis_content = ocr_res.strip()
+            image_analysis = analyze_image(raw_content)
+            ocr_text = (image_analysis.get("extracted_text") or "").strip()
+            description = (image_analysis.get("description") or "").strip()
+            if ocr_text:
+                analysis_content = ocr_text
+            elif description:
+                analysis_content = description
+            if description:
+                analysis_content = (
+                    f"{analysis_content}\n\n[Visual description: {description}]"
+                    if analysis_content
+                    else f"[Visual description: {description}]"
+                )
         except Exception as err:  # noqa: BLE001
-            logger.warning(f"Groq Vision OCR failed, using raw content: {err}")
+            logger.warning(f"qwen image analysis failed, falling back to OCR: {err}")
+            try:
+                ocr_res = extract_text_from_image(raw_content)
+                if isinstance(ocr_res, str) and ocr_res.strip():
+                    analysis_content = ocr_res.strip()
+            except Exception as err2:  # noqa: BLE001
+                logger.warning(f"Groq Vision OCR failed, using raw content: {err2}")
 
     # Stage 2: Entity extraction & pgvector RAG search
     extracted_entities = _extract_entities_from_text(analysis_content)
@@ -383,7 +648,7 @@ def phishing_worker_node(
     try:
         prompt_text = build_phishing_analysis_prompt(source, analysis_content)
         messages = [
-            SystemMessage(content=PHISHING_SYSTEM_PROMPT),
+            SystemMessage(content=_build_phishing_system_prompt()),
             HumanMessage(content=prompt_text),
         ]
         llm_response = llm.invoke(messages)
@@ -406,15 +671,36 @@ def phishing_worker_node(
     except Exception as err:  # noqa: BLE001
         logger.debug(f"Phishing LLM invocation skipped or failed, using rule base: {err}")
 
-    # Stage 4: Agentic research enhancement (planner-gated, on-demand web search)
-    research = _run_research_enhancement(analysis_content, extracted_entities, RAG_hits, finding)
-    if research.get("queried") and research.get("web_hits"):
-        finding = _final_verdict_with_web(source, analysis_content, finding, research)
+    # Stage 4: Agentic research enhancement (planner-gated, on-demand web search).
+    # For PHISHING material triggers the dedicated Research Worker runs the web
+    # verification (Stage 2 of the documented design) — skip the internal search
+    # here to avoid duplicate Tavily queries. CALL transcripts keep it.
+    if state.get("trigger_type") == "PHISHING":
+        research = {
+            "queried": False,
+            "decision": "delegated-to-research-worker",
+            "reasoning": "Research Worker verifies web evidence for PHISHING material triggers.",
+            "queries": [],
+            "web_hits": [],
+        }
+    else:
+        research = _run_research_enhancement(analysis_content, extracted_entities, RAG_hits, finding)
+        if research.get("queried") and research.get("web_hits"):
+            finding = _final_verdict_with_web(source, analysis_content, finding, research)
+
+    # Surface the visual-indicator description as evidence so the explanation
+    # panel shows why the screenshot was flagged.
+    if is_image and image_analysis.get("description"):
+        finding.evidence.insert(
+            0, f"Visual indicators in screenshot: {image_analysis['description']}"
+        )
 
     return {
         "phishing_finding": finding.model_dump(),
         "extracted_entities": extracted_entities,
         "research": research,
+        "phishing_ocr_text": analysis_content if is_image else "",
+        "phishing_image_description": (image_analysis.get("description") or "") if is_image else "",
     }
 
 
@@ -427,12 +713,23 @@ def analyze_call_transcript(transcript: list[dict[str, Any]]) -> dict[str, Any]:
     in-depth verdict (with optional external research evidence) for a CALL
     session.
     """
+    # Only the caller's speech determines the fraud verdict. The AUTO_TALK
+    # agent's own anchor-question probes (and the customer's replies) must not
+    # inflate the score — e.g. the agent asking "have you been asked to
+    # transfer money?" is not evidence of fraud.
+    ignored_speakers = {
+        "TRANSAFE_AI", "AGENT", "TRANSAFE", "BOT", "ASSISTANT", "COPILOT",
+        "CUSTOMER", "USER", "VICTIM", "TARGET",
+    }
     lines: list[str] = []
     for utt in transcript:
-        speaker = str(utt.get("speaker", "CALLER"))
+        speaker = str(utt.get("speaker", "CALLER")).upper()
         text = str(utt.get("text") or utt.get("utterance", "")).strip()
-        if text:
-            lines.append(f"[{speaker}] {text}")
+        if not text:
+            continue
+        if speaker in ignored_speakers:
+            continue
+        lines.append(f"[{speaker}] {text}")
     content = "\n".join(lines)
 
     if not content.strip():

@@ -46,6 +46,12 @@ export const StepByStepUserCall: React.FC<StepByStepUserCallProps> = ({
   const [suspicionScore, setSuspicionScore] = useState<number>(0);
   const [deepAnalysis, setDeepAnalysis] = useState<DeepAnalysisResult | null>(null);
   const [callMode, setCallMode] = useState<CallMode>('LISTEN');
+  // True while the events WS is kept open after call_ended to receive the
+  // backend's FINAL call-end deep analysis (deep_analysis: call_end). The
+  // backend broadcasts call_ended first, then runs the final Groq analysis in
+  // a background task (can take 30s+), so the WS must stay open to receive it
+  // — otherwise the card would keep showing the stale mid-call escalation 0.
+  const [awaitingFinalAnalysis, setAwaitingFinalAnalysis] = useState(false);
 
   // Diagnostic Step Logs
   const [stepLogs, setStepLogs] = useState<string[]>([
@@ -54,9 +60,15 @@ export const StepByStepUserCall: React.FC<StepByStepUserCallProps> = ({
 
   const audioStreamerRef = useRef<CallAudioStreamer>(new CallAudioStreamer());
   const eventsWsClientRef = useRef<CallEventsWebSocketClient>(new CallEventsWebSocketClient());
+  // Safety-net timer that force-closes the events WS if the final call-end
+  // deep analysis never arrives (e.g. backend error) — avoids socket leaks.
+  const finalAnalysisTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     return () => {
+      if (finalAnalysisTimerRef.current !== null) {
+        window.clearTimeout(finalAnalysisTimerRef.current);
+      }
       audioStreamerRef.current.stopStreaming();
       eventsWsClientRef.current.close();
     };
@@ -148,6 +160,11 @@ export const StepByStepUserCall: React.FC<StepByStepUserCallProps> = ({
     setTranscripts([]);
     setSuspicionScore(0);
     setDeepAnalysis(null);
+    setAwaitingFinalAnalysis(false);
+    if (finalAnalysisTimerRef.current !== null) {
+      window.clearTimeout(finalAnalysisTimerRef.current);
+      finalAnalysisTimerRef.current = null;
+    }
     // A new call always starts in LISTEN — the Takeover button must show again
     // even if the previous call ended in AUTO_TALK. (The backend re-broadcasts
     // mode_change=AUTO_TALK right after the events WS connects if it auto-engaged.)
@@ -198,28 +215,70 @@ export const StepByStepUserCall: React.FC<StepByStepUserCallProps> = ({
             addLog(`🚨 [PHONE AGENT SUSPICION ${msg.risk_tier}] cumulative=${msg.suspicion_score} utterance=${msg.utterance_risk_score}${msg.trigger_escalation ? ' — ⚠️ ESCALATED (HIGH)' : ''}`);
           }
           if (msg.type === 'deep_analysis') {
-            setDeepAnalysis({
-              reason: msg.reason || 'call_end',
-              score: msg.score ?? 0,
-              risk_tier: msg.risk_tier || (msg.score && msg.score >= 70 ? 'HIGH' : msg.score && msg.score >= 40 ? 'MEDIUM' : 'LOW'),
-              confidence: msg.confidence ?? 0,
-              evidence: msg.evidence || [],
-              extracted_entities: {
-                phone_numbers: msg.extracted_entities?.phone_numbers || [],
-                urls: msg.extracted_entities?.urls || [],
-                bank_accounts: msg.extracted_entities?.bank_accounts || [],
-              },
-              research: msg.research
-                ? {
-                    queried: !!msg.research.queried,
-                    decision: msg.research.decision,
-                    reasoning: msg.research.reasoning,
-                    queries: msg.research.queries || [],
-                    web_hits: msg.research.web_hits || [],
-                  }
-                : undefined,
-              ts: new Date().toLocaleTimeString(),
-            });
+            // Guard against out-of-order events: once the FINAL call-end verdict
+            // (reason='call_end') has been received, ignore any late/stale
+            // mid-call escalation broadcast that races in afterwards — it would
+            // otherwise overwrite the authoritative 98/HIGH verdict with an old
+            // 0/LOW snapshot (the exact contradiction reported on the UI).
+            if (msg.reason === 'call_end') {
+              setDeepAnalysis({
+                reason: msg.reason || 'call_end',
+                score: msg.score ?? 0,
+                risk_tier: msg.risk_tier || (msg.score && msg.score >= 70 ? 'HIGH' : msg.score && msg.score >= 40 ? 'MEDIUM' : 'LOW'),
+                confidence: msg.confidence ?? 0,
+                evidence: msg.evidence || [],
+                extracted_entities: {
+                  phone_numbers: msg.extracted_entities?.phone_numbers || [],
+                  urls: msg.extracted_entities?.urls || [],
+                  bank_accounts: msg.extracted_entities?.bank_accounts || [],
+                },
+                research: msg.research
+                  ? {
+                      queried: !!msg.research.queried,
+                      decision: msg.research.decision,
+                      reasoning: msg.research.reasoning,
+                      queries: msg.research.queries || [],
+                      web_hits: msg.research.web_hits || [],
+                    }
+                  : undefined,
+                ts: new Date().toLocaleTimeString(),
+              });
+              setAwaitingFinalAnalysis(false);
+              // Final verdict received — safe to close the events WS now.
+              if (finalAnalysisTimerRef.current !== null) {
+                window.clearTimeout(finalAnalysisTimerRef.current);
+                finalAnalysisTimerRef.current = null;
+              }
+              eventsWsClientRef.current.close();
+            } else {
+              // Mid-call escalation snapshot. Only show it if we haven't already
+              // locked in the final call-end verdict.
+              setDeepAnalysis((prev) => {
+                if (prev && prev.reason === 'call_end') return prev;
+                return {
+                  reason: msg.reason || 'call_end',
+                  score: msg.score ?? 0,
+                  risk_tier: msg.risk_tier || (msg.score && msg.score >= 70 ? 'HIGH' : msg.score && msg.score >= 40 ? 'MEDIUM' : 'LOW'),
+                  confidence: msg.confidence ?? 0,
+                  evidence: msg.evidence || [],
+                  extracted_entities: {
+                    phone_numbers: msg.extracted_entities?.phone_numbers || [],
+                    urls: msg.extracted_entities?.urls || [],
+                    bank_accounts: msg.extracted_entities?.bank_accounts || [],
+                  },
+                  research: msg.research
+                    ? {
+                        queried: !!msg.research.queried,
+                        decision: msg.research.decision,
+                        reasoning: msg.research.reasoning,
+                        queries: msg.research.queries || [],
+                        web_hits: msg.research.web_hits || [],
+                      }
+                    : undefined,
+                  ts: new Date().toLocaleTimeString(),
+                };
+              });
+            }
             addLog(`🧠 [DEEP PHISHING ANALYSIS (${msg.reason})] score=${msg.score} tier=${msg.risk_tier}${msg.research?.queried ? ` · 🔎 web research: ${(msg.research.queries || []).length} query(ies), ${(msg.research.web_hits || []).length} hit(s)` : ''}`);
           }
           if (msg.type === 'mode_change' && msg.call_mode) {
@@ -236,12 +295,13 @@ export const StepByStepUserCall: React.FC<StepByStepUserCallProps> = ({
               // Use the session id from the event itself — `activeCallSessionId`
               // captured in this WS callback closure is STALE (pre-answer / null),
               // which would fetch /api/v1/call/null/tts/... → 404 → silent.
-              playAgentSpeech(config.baseUrl, msg.call_session_id, msg.tts_id, config.apiKey).catch(() => {});
+              // force=true for the hangup farewell so it interrupts any speech
+              // still playing and is always heard before the call ends.
+              playAgentSpeech(config.baseUrl, msg.call_session_id, msg.tts_id, config.apiKey, msg.action === 'hangup').catch(() => {});
             }
           }
           if (msg.type === 'call_ended') {
             audioStreamerRef.current.stopStreaming();
-            eventsWsClientRef.current.close();
             setCurrentStep(1);
             setActiveCallSessionId(null);
             setMicStatus('Not Connected');
@@ -250,7 +310,25 @@ export const StepByStepUserCall: React.FC<StepByStepUserCallProps> = ({
             setCallMode('LISTEN');
             // Keep deepAnalysis so the final call-end verdict stays visible
             // for review after the UI resets to Step 1.
-            addLog('📴 Call ended. 🧠 Final deep analysis retained below.');
+            //
+            // IMPORTANT: do NOT close the events WS here. The backend
+            // broadcasts call_ended FIRST, then runs the final call-end deep
+            // analysis in a background task and broadcasts deep_analysis
+            // (reason='call_end') AFTER — closing now would drop that final
+            // verdict, leaving the card stuck on the mid-call escalation
+            // snapshot (0/LOW) while the persisted case says 98/HIGH.
+            // The deep_analysis(call_end) handler closes the WS once received;
+            // this timer is the safety net if it never arrives.
+            setAwaitingFinalAnalysis(true);
+            if (finalAnalysisTimerRef.current !== null) {
+              window.clearTimeout(finalAnalysisTimerRef.current);
+            }
+            finalAnalysisTimerRef.current = window.setTimeout(() => {
+              eventsWsClientRef.current.close();
+              finalAnalysisTimerRef.current = null;
+              setAwaitingFinalAnalysis(false);
+            }, 60000); // 60s: Groq deep analysis can take 30s+ under rate limits
+            addLog('📴 Call ended. ⏳ Awaiting final call-end deep analysis...');
           }
         },
         (err) => addLog(`[EVENTS WS ERROR] ${err}`),
@@ -319,10 +397,10 @@ export const StepByStepUserCall: React.FC<StepByStepUserCallProps> = ({
     // 1. Stop audio instantly (0ms latency), but KEEP the events WS open so the
     //    backend's call-end deep analysis (deep_analysis: call_end) can still
     //    arrive — the call_ended handler closes it once everything is received.
-    audioStreamerRef.curr
+    audioStreamerRef.current.stopStreaming();
     // Reset the mode so the next call shows the "Use agent to call" Takeover
     // button again instead of the stale AUTO_TALK badge.
-    setCallMode('LISTEN');ent.stopStreaming();
+    setCallMode('LISTEN');
     setCurrentStep(1);
     setActiveCallSessionId(null);
     setMicStatus('Not Connected');
@@ -529,6 +607,12 @@ export const StepByStepUserCall: React.FC<StepByStepUserCallProps> = ({
             </span>
             <span style={{ fontSize: '11px', color: '#9ca3af' }}>confidence {(deepAnalysis.confidence * 100).toFixed(0)}%</span>
           </div>
+          {awaitingFinalAnalysis && deepAnalysis.reason !== 'call_end' && (
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px', padding: '6px 10px', borderRadius: '8px', backgroundColor: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.35)', fontSize: '11px', color: '#fbbf24' }}>
+              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#fbbf24', animation: 'transafePulse 1.2s infinite' }} />
+              ⏳ Call ended — this is the mid-call snapshot. Awaiting the final call-end deep analysis to update the verdict...
+            </div>
+          )}
           {deepAnalysis.evidence.length > 0 && (
             <ul style={{ margin: '0 0 8px 0', paddingLeft: '18px', fontSize: '12px', color: '#d1d5db' }}>
               {deepAnalysis.evidence.map((ev, i) => (

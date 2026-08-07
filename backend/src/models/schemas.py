@@ -1,9 +1,11 @@
 """Pydantic models and schemas for TranSafe API requests and responses."""
 
+import base64
+import binascii
 from datetime import UTC, datetime
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 DataT = TypeVar("DataT")
 
@@ -147,6 +149,28 @@ class PhishingMaterial(BaseModel):
     content: str
     source: str = "SMS"
 
+    @model_validator(mode="after")
+    def _validate_image_size(self) -> "PhishingMaterial":
+        if str(self.content_type).upper() != "IMAGE":
+            return self
+
+        content = self.content.strip()
+        if not content:
+            raise ValueError("Image content is required for phishing image analysis.")
+
+        if content.startswith("data:") and "," in content:
+            content = content.split(",", 1)[1]
+
+        try:
+            decoded = base64.b64decode(content, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("Invalid base64 image payload.") from exc
+
+        if len(decoded) > 10 * 1024 * 1024:
+            raise ValueError("Image upload exceeds the 10 MB limit.")
+
+        return self
+
 
 class PhishingTriggerRequest(BaseModel):
     user_id: str
@@ -159,30 +183,6 @@ class PhishingTriggerData(BaseModel):
     session_id: str
     message: str = "Phishing analysis initiated."
     estimated_seconds: int = 12
-
-
-# Fraud Report Schemas
-class ReportDetail(BaseModel):
-    description: str
-    phone_numbers: list[str] = Field(default_factory=list)
-    bank_accounts: list[str] = Field(default_factory=list)
-    fraud_type: str
-    amount_lost_myr: float | None = None
-    incident_date: str | None = None
-
-
-class ReportTriggerRequest(BaseModel):
-    user_id: str
-    associated_case_id: str | None = None
-    report: ReportDetail
-
-
-class ReportTriggerData(BaseModel):
-    case_id: str
-    message: str = (
-        "Thank you for your report. Your information helps protect other users."
-    )
-    entities_recorded: dict[str, list[str]] = Field(default_factory=dict)
 
 
 # Biometric Result Schemas
@@ -217,12 +217,27 @@ class RecentCaseItem(BaseModel):
     trigger_type: str
     caller_number: str | None = None
     risk_tier: str | None = None
+    risk_score: int = 0
+    status: str = "pending"
+    user_label: str = "unlabeled"
+    archetype: str | None = None
+    snippet: str | None = None
     created_at: str
 
 
 class RecentCasesData(BaseModel):
     has_recent_activity: bool
     recent_cases: list[RecentCaseItem] = Field(default_factory=list)
+
+
+class CaseLabelRequest(BaseModel):
+    label: Literal["fraud", "benign", "unlabeled"] = "fraud"
+
+
+class CaseLabelData(BaseModel):
+    case_id: str
+    user_label: str
+    message: str
 
 
 # Admin Endpoints Schemas
@@ -319,3 +334,11 @@ class AdminAlertUpdateData(BaseModel):
     alert_id: str
     status: str
     reviewed_at: str
+
+
+class CaseActionData(BaseModel):
+    case_id: str
+    status: str
+    action_taken: str
+    unfreeze_at: str | None = None
+    reason: str | None = None

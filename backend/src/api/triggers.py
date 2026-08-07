@@ -1,10 +1,11 @@
+import asyncio
 import json
 import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 
 logger = logging.getLogger(__name__)
 
@@ -13,10 +14,15 @@ from src.api.session_store import session_store
 from src.api.websocket_call import broadcast_event, handle_call_ended
 from src.services.call_precheck import run_call_precheck
 from src.db.supabase import (
+    fetch_case_context,
+    fetch_fraud_case,
     get_user_biometrics,
+    insert_learned_keyword,
     insert_telemetry_event,
     insert_transaction,
+    list_recent_cases,
     lookup_scam_recipient,
+    update_fraud_case_label,
     update_transaction_status,
     upsert_user_biometrics,
 )
@@ -27,12 +33,12 @@ from src.models.schemas import (
     CallTakeoverData,
     CallTriggerData,
     CallTriggerRequest,
+    CaseLabelData,
+    CaseLabelRequest,
     PhishingTriggerData,
     PhishingTriggerRequest,
     RecentCaseItem,
     RecentCasesData,
-    ReportTriggerData,
-    ReportTriggerRequest,
     ResponseEnvelope,
     TelemetryIngestRequest,
     TelemetryTriggerData,
@@ -353,32 +359,6 @@ async def trigger_phishing(
 
 
 @router.post(
-    "/trigger/report",
-    response_model=ResponseEnvelope[ReportTriggerData],
-    status_code=status.HTTP_200_OK,
-)
-async def trigger_report(
-    payload: ReportTriggerRequest,
-) -> ResponseEnvelope[ReportTriggerData]:
-    """Submit a user fraud report."""
-    case_id = f"case-{uuid.uuid4().hex[:12]}"
-    entities = {
-        "phone_numbers": payload.report.phone_numbers,
-        "bank_accounts": payload.report.bank_accounts,
-    }
-    return make_envelope(
-        ReportTriggerData(
-            case_id=case_id,
-            message=(
-                "Thank you for your report. Your information helps protect"
-                " other users."
-            ),
-            entities_recorded=entities,
-        )
-    )
-
-
-@router.post(
     "/biometric/result",
     response_model=ResponseEnvelope[BiometricResultData],
     status_code=status.HTTP_200_OK,
@@ -516,25 +496,173 @@ async def call_takeover(session_id: str) -> ResponseEnvelope[CallTakeoverData]:
 )
 async def get_recent_cases(
     user_id: str = Query(..., description="User UUID"),
+    limit: int = Query(20, ge=1, le=100, description="Max cases to return"),
 ) -> ResponseEnvelope[RecentCasesData]:
-    """Fetch recent active call sessions or phishing submissions for a user."""
-    raw_cases = session_store.get_recent_cases(user_id)
-    recent_items = [
-        RecentCaseItem(
-            case_id=c.get("case_id", ""),
-            trigger_type=c.get("trigger_type", "CALL"),
-            caller_number=c.get("caller_number"),
-            risk_tier=c.get("risk_tier", "HIGH"),
-            created_at=c.get(
-                "created_at", datetime.now(UTC).isoformat()
-            ),
+    """Fetch the user's most recent fraud cases (DB-backed, newest first)."""
+    try:
+        raw_cases = await asyncio.to_thread(list_recent_cases, user_id, limit)
+    except Exception as err:  # noqa: BLE001
+        logger.warning(f"list_recent_cases failed, falling back to in-memory: {err}")
+        raw_cases = []
+
+    # Fall back to in-memory session records if the DB has nothing for this user
+    if not raw_cases:
+        raw_cases = session_store.get_recent_cases(user_id)
+
+    recent_items = []
+    for c in raw_cases:
+        case_id = c.get("case_id") or c.get("id")
+        if not case_id:
+            continue
+        created_at = c.get("created_at") or datetime.now(UTC).isoformat()
+        recent_items.append(
+            RecentCaseItem(
+                case_id=str(case_id),
+                trigger_type=str(c.get("trigger_type", "CALL")),
+                caller_number=c.get("caller_number"),
+                risk_tier=c.get("risk_tier", "LOW"),
+                risk_score=int(c.get("risk_score") or 0),
+                status=str(c.get("status") or "pending"),
+                user_label=str(c.get("user_label") or "unlabeled"),
+                archetype=str(c.get("archetype") or ""),
+                snippet=_extract_snippet(c) or str(c.get("snippet") or ""),
+                created_at=created_at,
+            )
         )
-        for c in raw_cases
-    ]
     return make_envelope(
         RecentCasesData(
             has_recent_activity=len(recent_items) > 0,
             recent_cases=recent_items,
+        )
+    )
+
+
+def _extract_snippet(case: dict[str, Any]) -> str:
+    """Short human-readable description (~160 chars) of what a case is about.
+
+    Priority order (matches the current xai_report shapes):
+      1. First evidence bullet from the highest-scoring ``worker_findings``
+         entry — the most specific detail (e.g. "Web search confirmed
+         phishing-related report for '<domain>'").
+      2. ``verdict_summary`` — the plain-English explanation (graph path).
+      3. ``deep_analysis`` verdict/evidence (legacy call path).
+      4. ``evidence`` list (legacy shape).
+      5. ``research.summary`` (RAG/web research summary).
+      6. Generic ``summary`` fallback.
+    Returns "" when nothing useful is stored yet.
+    """
+    xai_report = case.get("xai_report")
+    if isinstance(xai_report, dict):
+        worker_findings = xai_report.get("worker_findings")
+        if isinstance(worker_findings, list):
+            # Prefer the finding from the worker that contributed the most,
+            # so the card shows the decisive detail instead of generic text.
+            ranked = sorted(
+                (
+                    f
+                    for f in worker_findings
+                    if isinstance(f, dict)
+                    and isinstance(f.get("evidence"), list)
+                    and f["evidence"]
+                ),
+                key=lambda f: float(f.get("score") or 0.0),
+                reverse=True,
+            )
+            if ranked:
+                return str(ranked[0]["evidence"][0])[:160]
+
+        verdict = xai_report.get("verdict_summary")
+        if verdict and str(verdict).strip():
+            return str(verdict)[:160]
+
+        deep = xai_report.get("deep_analysis")
+        if isinstance(deep, dict):
+            deep_verdict = deep.get("verdict_summary")
+            if deep_verdict and str(deep_verdict).strip():
+                return str(deep_verdict)[:160]
+            deep_evidence = deep.get("evidence")
+            if isinstance(deep_evidence, list) and deep_evidence:
+                return str(deep_evidence[0])[:160]
+
+        evidence = xai_report.get("evidence")
+        if isinstance(evidence, list) and evidence:
+            return str(evidence[0])[:160]
+
+        research = xai_report.get("research")
+        if isinstance(research, dict):
+            summary = research.get("summary")
+            if summary and str(summary).strip():
+                return str(summary)[:160]
+
+        if xai_report.get("summary"):
+            return str(xai_report["summary"])[:160]
+    return ""
+
+
+def _build_learning_memory_from_case(
+    case_id: str, case: dict[str, Any], context: dict[str, Any]
+) -> None:
+    """Write a fraud memory + learned keywords for a user-confirmed fraud case.
+
+    Runs synchronously inside a BackgroundTask thread.
+    """
+    from src.agents.workers.vector_memory_utils import (
+        extract_novel_phrases,
+        upsert_fraud_memory_from_case,
+    )
+
+    try:
+        upsert_fraud_memory_from_case(case_id, case, context)
+    except Exception as err:  # noqa: BLE001
+        logger.warning(f"fraud memory upsert failed for {case_id}: {err}")
+
+    try:
+        novel = extract_novel_phrases(case, context)
+        for kw, ktype in novel:
+            insert_learned_keyword(case_id, kw, ktype)
+    except Exception as err:  # noqa: BLE001
+        logger.warning(f"learned keyword extraction failed for {case_id}: {err}")
+
+
+@router.post(
+    "/cases/{case_id}/label",
+    response_model=ResponseEnvelope[CaseLabelData],
+    status_code=status.HTTP_200_OK,
+)
+async def label_fraud_case(
+    case_id: str,
+    payload: CaseLabelRequest,
+    background_tasks: BackgroundTasks,
+) -> ResponseEnvelope[CaseLabelData]:
+    """Human-in-the-loop labeling: user marks a case as fraud / benign / unlabeled.
+
+    - 'fraud': updates fraud_cases.user_label and (in background) writes the
+      case into fraud memory + extracts novel heavy/light keywords.
+    - 'benign': just updates the label (no memory writes).
+    - 'unlabeled': resets the label so the case can be reviewed again.
+    """
+    case = await asyncio.to_thread(fetch_fraud_case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+    label = payload.label
+    await asyncio.to_thread(update_fraud_case_label, case_id, label)
+
+    if label == "fraud":
+        background_tasks.add_task(
+            _build_learning_memory_from_case,
+            case_id,
+            case,
+            await asyncio.to_thread(fetch_case_context, case_id),
+        )
+
+    return make_envelope(
+        CaseLabelData(
+            case_id=case_id,
+            user_label=label,
+            message="Case labeled as fraud — TranSafe is learning from this case."
+            if label == "fraud"
+            else "Case label updated.",
         )
     )
 

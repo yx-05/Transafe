@@ -10,7 +10,6 @@ import { TransactionCard } from './components/user/TransactionCard';
 import { BiometricRegistrationCard } from './components/user/BiometricRegistrationCard';
 import { TelemetryCard } from './components/user/TelemetryCard';
 import { PhishingCard } from './components/user/PhishingCard';
-import { FraudReportCard } from './components/user/FraudReportCard';
 import { CallCard } from './components/user/CallCard';
 import { StepByStepUserCall } from './components/user/StepByStepUserCall';
 import { RecentCasesCard } from './components/user/RecentCasesCard';
@@ -18,8 +17,6 @@ import { RecentCasesCard } from './components/user/RecentCasesCard';
 // Scammer Page Cards
 import { ScammerCallSimulator } from './components/scammer/ScammerCallSimulator';
 import { StepByStepScammerCall } from './components/scammer/StepByStepScammerCall';
-import { PhishingGenerator } from './components/scammer/PhishingGenerator';
-import { CoercionSimulator } from './components/scammer/CoercionSimulator';
 
 // Admin Page Cards
 import { CaseListCard } from './components/admin/CaseListCard';
@@ -174,8 +171,6 @@ function App() {
                 onOpenXaiReport={setActiveXaiReport}
               />
 
-              <FraudReportCard config={config} userId={userId} />
-
               <RecentCasesCard config={config} userId={userId} />
             </div>
           </div>
@@ -201,8 +196,6 @@ function App() {
               <StepByStepScammerCall config={config} victimUserId={userId} />
               {/* Legacy ScammerCallSimulator disabled to prevent duplicate audio stream conflicts */}
               {/* <ScammerCallSimulator config={config} victimUserId={userId} /> */}
-              <CoercionSimulator config={config} victimUserId={userId} />
-              <PhishingGenerator config={config} victimUserId={userId} />
             </div>
           </div>
         )}

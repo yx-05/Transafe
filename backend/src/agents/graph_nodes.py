@@ -1,7 +1,9 @@
 """Graph node implementations for Risk Scorer, XAI Report, and Action Dispatcher."""
 
+import asyncio
 import json
 import os
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
@@ -12,6 +14,8 @@ from src.db.supabase import (
     freeze_transaction,
     insert_admin_alert,
     insert_fraud_case,
+    insert_phishing_submission,
+    resolve_transaction_uuid,
 )
 
 WORKER_WEIGHTS: dict[str, float] = {
@@ -23,8 +27,20 @@ WORKER_WEIGHTS: dict[str, float] = {
 }
 
 
+def _is_uuid(value: str | None) -> bool:
+    """Return True if value is a valid UUID string (fraud_cases.session_id is UUID NOT NULL)."""
+    if not value:
+        return False
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, AttributeError):
+        return False
+
+
 def risk_scorer_node(state: GraphState) -> dict[str, Any]:
     """Aggregates findings from active worker nodes using weighted scoring and tier rules."""
+    trigger_type = state.get("trigger_type", "")
     findings: dict[str, Any] = {
         "telemetry": state.get("telemetry_finding"),
         "research": state.get("research_finding"),
@@ -78,7 +94,33 @@ def risk_scorer_node(state: GraphState) -> dict[str, Any]:
     ):
         score = max(score, 90)
 
+    # Case-coercion match override: when the financial worker confirms the
+    # recipient account matches a linked case's context (scam call transcript
+    # or phishing material), this is a dominant signal. Coerce the overall
+    # score to 98 regardless of other workers so the transaction is frozen
+    # instead of being diluted by low telemetry/research scores.
+    if financial_f and any(
+        "matches active call transcript or phishing case context" in str(ev)
+        for ev in financial_f.get("evidence", [])
+    ):
+        score = max(score, 98)
+
     if phone_f and phone_f.get("score", 0) >= 90 and phone_f.get("confidence", 0.0) > 0.95:
+        score = max(score, 90)
+
+    # PHISHING trigger: the phishing worker's verdict is the dominant signal.
+    # A confident high phishing score means the submitted material IS phishing
+    # even if the research worker found no blacklist entry yet (or could not
+    # verify an image-only URL). Without this, a strong phishing finding is
+    # diluted by the low research score and an obvious phishing page can fall
+    # to LOW — which is what happened for the PayPal lookalike test image.
+    phishing_f = active_findings.get("phishing")
+    if (
+        trigger_type == "PHISHING"
+        and phishing_f
+        and phishing_f.get("score", 0) >= 75
+        and phishing_f.get("confidence", 0.0) > 0.80
+    ):
         score = max(score, 90)
 
     score = max(0, min(100, score))
@@ -167,6 +209,7 @@ Keep the verdict_summary under 50 words. Use simple language a non-technical use
         ],
         "worker_findings": active_findings,
         "recommendation": recommendation,
+        "associated_case_id": state.get("associated_case_id"),
     }
 
     status_messages.append("XAI Node: structured explanation generated")
@@ -188,8 +231,21 @@ async def action_dispatcher_node(state: GraphState) -> dict[str, Any]:
     xai_report = dict(state.get("xai_report") or {})
     status_messages = list(state.get("status_messages") or [])
 
+    # Transaction triggers carry transaction_id nested under payload["transaction"]
+    # (frontend sends {transaction: {transaction_id: ...}}), while some legacy
+    # flows send it flat — handle both shapes.
+    tx_payload = payload.get("transaction") if isinstance(payload.get("transaction"), dict) else payload
+    transaction_id = str(tx_payload.get("transaction_id") or "").strip() or None
+
     case_id = f"case-{session_id}" if session_id else "case-unknown"
     action_taken = ""
+
+    # fraud_cases.session_id is UUID NOT NULL — the frontend sends human-readable
+    # session ids ("sess-..."), so normalize to a fresh UUID and preserve the real
+    # session id in the XAI report (a non-UUID value would make the insert fail).
+    if not _is_uuid(session_id):
+        xai_report["source_session_id"] = session_id
+        session_id = str(uuid.uuid4())
 
     if tier == "LOW":
         action_taken = "APPROVE"
@@ -197,14 +253,15 @@ async def action_dispatcher_node(state: GraphState) -> dict[str, Any]:
     elif tier == "MEDIUM":
         action_taken = "BIOMETRIC_CHALLENGE"
         status = "pending_biometric"
-    elif tier == "HIGH":
+    elif tier == "HIGH" and trigger_type != "PHISHING":
         action_taken = "FREEZE_30_MIN"
         status = "frozen"
-        transaction_id = payload.get("transaction_id")
         if transaction_id:
             try:
-                await freeze_transaction(
-                    transaction_id=transaction_id, freeze_duration_seconds=1800
+                await asyncio.to_thread(
+                    freeze_transaction,
+                    transaction_id=transaction_id,
+                    freeze_duration_seconds=1800,
                 )
             except Exception as e:  # noqa: BLE001
                 status_messages.append(
@@ -219,6 +276,39 @@ async def action_dispatcher_node(state: GraphState) -> dict[str, Any]:
         action_taken = "APPROVE"
         status = "approved"
 
+    phishing_submission_data: dict[str, Any] | None = None
+    if trigger_type == "PHISHING":
+        if tier == "HIGH":
+            action_taken = "WARNING"
+            status = "reported"
+        elif tier == "MEDIUM":
+            action_taken = "ADVISORY"
+            status = "pending"
+        else:
+            action_taken = "NO_ACTION"
+            status = "pending"
+
+        material = payload.get("material") or payload.get("phishing_material") or {}
+        content_type = str(material.get("content_type") or material.get("source_type") or "TEXT").upper()
+        raw_content = str(material.get("content") or "")
+        extracted_text = str(state.get("phishing_ocr_text") or "").strip()
+        image_description = str(state.get("phishing_image_description") or "").strip()
+
+        if content_type == "IMAGE":
+            raw_content = extracted_text or image_description or "[image submitted]"
+
+        phishing_submission_data = {
+            "case_id": case_id,
+            "content_type": content_type,
+            "raw_content": raw_content,
+            "extracted_text": extracted_text if content_type == "IMAGE" else None,
+            "analysis_result": {
+                **xai_report,
+                "phishing_ocr_text": state.get("phishing_ocr_text"),
+                "phishing_image_description": state.get("phishing_image_description"),
+            },
+        }
+
     try:
         case_data: dict[str, Any] = {
             "session_id": session_id,
@@ -230,25 +320,62 @@ async def action_dispatcher_node(state: GraphState) -> dict[str, Any]:
             "action_taken": action_taken,
             "xai_report": xai_report,
         }
-        if payload.get("transaction_id"):
-            case_data["transaction_id"] = payload.get("transaction_id")
+        if transaction_id:
+            # fraud_cases.transaction_id is UUID REFERENCES transactions(id), so
+            # the TEXT business id must be resolved to the row's UUID PK before
+            # the insert — otherwise the case insert fails with 22P02 and the
+            # transaction never gets a case row it can be flagged under.
+            tx_uuid = await asyncio.to_thread(
+                resolve_transaction_uuid, transaction_id
+            )
+            if tx_uuid:
+                case_data["transaction_id"] = tx_uuid
+            else:
+                status_messages.append(
+                    f"Action Dispatcher: transaction {transaction_id} not found "
+                    "in DB — case created without transaction link"
+                )
 
-        inserted_id = await insert_fraud_case(case_data)
+        # insert_fraud_case is a SYNC Supabase call — run it in a thread so the
+        # event loop is not blocked, and never await it directly.
+        inserted_id = await asyncio.to_thread(insert_fraud_case, case_data)
         if inserted_id:
             case_id = inserted_id
     except Exception as e:  # noqa: BLE001
         status_messages.append(f"Action Dispatcher: DB insert_fraud_case warning: {e}")
 
-    if tier == "HIGH":
+    if tier == "HIGH" and trigger_type != "PHISHING":
         try:
-            await insert_admin_alert({
-                "case_id": case_id,
-                "alert_type": "HIGH_RISK_FREEZE",
-                "details": xai_report,
-            })
+            await asyncio.to_thread(
+                insert_admin_alert,
+                {
+                    "case_id": case_id,
+                    "alert_type": "HIGH_RISK_FREEZE",
+                    "details": xai_report,
+                },
+            )
         except Exception as e:  # noqa: BLE001
             status_messages.append(
                 f"Action Dispatcher: DB insert_admin_alert warning: {e}"
+            )
+
+    # Wire the phishing submission row (PHISHING trigger): persist the case
+    # evidence trail without storing the uploaded image bytes. If the fraud
+    # case insert failed, case_id is still the placeholder "case-..." string
+    # (not a UUID) — store NULL so the submission row still records (schema:
+    # case_id UUID REFERENCES fraud_cases(id) ON DELETE SET NULL).
+    if phishing_submission_data:
+        phishing_submission_data["case_id"] = (
+            case_id if _is_uuid(case_id) else None
+        )
+        try:
+            await asyncio.to_thread(
+                insert_phishing_submission,
+                phishing_submission_data,
+            )
+        except Exception as e:  # noqa: BLE001
+            status_messages.append(
+                f"Action Dispatcher: DB insert_phishing_submission warning: {e}"
             )
 
     xai_report["case_id"] = case_id

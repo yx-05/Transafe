@@ -1,12 +1,62 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSimulation } from '../context/SimulationContext';
+import { useApi } from '../context/ApiContext';
 import { UserHeader } from '../components/UserHeader';
+import type { RecentCaseItem, UserLabel } from '../types/api';
 import robotLineArt from '../assets/robot.png';
+
+const labelCopy: Record<UserLabel, string> = {
+  unlabeled: 'Unlabeled',
+  fraud: 'Confirmed fraud',
+  benign: 'Not fraud',
+};
 
 export const HomePage: React.FC = () => {
   const { accountBalance, transactions } = useSimulation();
+  const { config, client, userId } = useApi();
   const navigate = useNavigate();
+
+  // ---- Recent Cases (real backend) ----
+  const [cases, setCases] = useState<RecentCaseItem[]>([]);
+  const [casesLoading, setCasesLoading] = useState(false);
+  const [labeling, setLabeling] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchCases();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.baseUrl, userId]);
+
+  const fetchCases = async () => {
+    setCasesLoading(true);
+    try {
+      const data = await client.getRecentCases(userId);
+      setCases(data.recent_cases || []);
+    } catch (err: any) {
+      console.error('Fetch cases failed', err);
+    } finally {
+      setCasesLoading(false);
+    }
+  };
+
+  const labelCase = async (caseId: string, label: UserLabel) => {
+    setLabeling(caseId);
+    try {
+      await client.labelCase(caseId, label);
+      setCases((prev) => prev.map((c) => (c.case_id === caseId ? { ...c, user_label: label } : c)));
+      await fetchCases();
+    } catch (err: any) {
+      console.error('Label case failed', err);
+    } finally {
+      setLabeling(null);
+    }
+  };
+
+  const tierColor = (tier: string) => {
+    if (tier === 'HIGH') return '#ba1a1a';
+    if (tier === 'MEDIUM') return '#f59e0b';
+    return '#10b981';
+  };
 
   return (
     <div className="user-app-layout pb-28 min-h-screen relative bg-[#f8f9fa]">
@@ -207,6 +257,115 @@ export const HomePage: React.FC = () => {
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* ======================================================
+              FRAUD CASE HISTORY & LABELING (real backend)
+             ====================================================== */}
+          <div className="bg-white p-6 md:p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.05)] border border-gray-200">
+            <div className="flex justify-between items-center mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-[#dae1ff] rounded-[14px] flex items-center justify-center">
+                  <span className="material-symbols-outlined text-[#0050cb]">history</span>
+                </div>
+                <div>
+                  <h3 className="text-xl md:text-2xl font-bold text-gray-900">Case History & Fraud Labeling</h3>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Label confirmed fraud cases to help TranSafe learn from them.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={fetchCases}
+                disabled={casesLoading}
+                className="flex items-center gap-1 text-[#0050cb] text-sm font-bold hover:underline disabled:opacity-50"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '16px', animation: casesLoading ? 'spin 1s linear infinite' : 'none' }}>
+                  refresh
+                </span>
+                Refresh
+              </button>
+            </div>
+
+            {cases.length === 0 ? (
+              <p className="text-sm text-gray-500 text-center py-8">
+                No cases yet — run a call, phishing, or report trigger to build your history.
+              </p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {cases.map((c, idx) => (
+                  <div
+                    key={`${c.case_id}-${idx}`}
+                    className="p-4 rounded-[20px] border border-gray-100 hover:bg-gray-50 transition-colors flex flex-col md:flex-row md:items-center md:justify-between gap-4"
+                  >
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <strong className="font-mono text-sm text-gray-900">
+                          {c.case_id.length > 12 ? `${c.case_id.slice(0, 12)}…` : c.case_id}
+                        </strong>
+                        <span className="text-[10px] font-bold uppercase tracking-wide text-white bg-[#0050cb] px-2 py-0.5 rounded-full">
+                          {c.trigger_type}
+                        </span>
+                        {c.risk_score > 0 && (
+                          <span className="text-xs font-bold" style={{ color: tierColor(c.risk_tier) }}>
+                            Score {c.risk_score} · {c.risk_tier}
+                          </span>
+                        )}
+                      </div>
+                      {c.caller_number && <span className="text-xs text-gray-600">📞 {c.caller_number}</span>}
+                      {c.archetype && <span className="text-xs text-gray-600">🧠 {c.archetype}</span>}
+                      {c.snippet && (
+                        <span className="text-xs text-gray-500 italic">“{c.snippet}”</span>
+                      )}
+                      <span className="text-[10px] text-gray-400 font-mono">
+                        {new Date(c.created_at).toLocaleString()}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap md:justify-end">
+                      <span
+                        className="text-[10px] font-bold uppercase px-2 py-1 rounded-full border"
+                        style={{
+                          color: c.user_label === 'fraud' ? '#ba1a1a' : c.user_label === 'benign' ? '#10b981' : '#6b7280',
+                          borderColor: c.user_label === 'fraud' ? '#fca5a5' : c.user_label === 'benign' ? '#a7f3d0' : '#e5e7eb',
+                          backgroundColor: c.user_label === 'fraud' ? '#fff1f0' : c.user_label === 'benign' ? '#ecfdf5' : '#f9fafb',
+                        }}
+                      >
+                        {labelCopy[c.user_label]}
+                      </span>
+                      <div className="flex gap-1.5">
+                        <button
+                          disabled={labeling === c.case_id || c.user_label === 'fraud'}
+                          onClick={() => labelCase(c.case_id, 'fraud')}
+                          className="flex items-center gap-1 text-[11px] font-bold px-3 py-1.5 rounded-full bg-[#fff1f0] text-[#ba1a1a] border border-[#fecaca] hover:bg-[#ffdad6] disabled:opacity-40 transition-colors"
+                          title="Mark this case as fraud — TranSafe will learn from it"
+                        >
+                          <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>verified</span>
+                          Fraud
+                        </button>
+                        <button
+                          disabled={labeling === c.case_id || c.user_label === 'benign'}
+                          onClick={() => labelCase(c.case_id, 'benign')}
+                          className="flex items-center gap-1 text-[11px] font-bold px-3 py-1.5 rounded-full bg-[#ecfdf5] text-[#059669] border border-[#a7f3d0] hover:bg-[#d1fae5] disabled:opacity-40 transition-colors"
+                          title="Mark this case as not fraud"
+                        >
+                          <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>cancel</span>
+                          Not Fraud
+                        </button>
+                        <button
+                          disabled={labeling === c.case_id || c.user_label === 'unlabeled'}
+                          onClick={() => labelCase(c.case_id, 'unlabeled')}
+                          className="flex items-center gap-1 text-[11px] font-bold px-3 py-1.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200 disabled:opacity-40 transition-colors"
+                          title="Reset label"
+                        >
+                          <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>restart_alt</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </main>
       </div>

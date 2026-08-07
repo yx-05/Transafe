@@ -197,15 +197,72 @@ export class CallAudioStreamer {
  * through the WebM/Opus peer-relay player — so this uses a simple blob URL
  * instead of the MediaSource pipeline.
  */
+
+// Serialized agent-speech playback: STT delivers sentence fragments and each
+// one triggers a new `talking` event, so without pacing the agent's audio
+// overlaps with itself. We play one utterance at a time and let the newest
+// utterance replace any pending one (newest-wins). `force` (used for the
+// hangup farewell) interrupts whatever is currently playing.
+let activeAudio: HTMLAudioElement | null = null;
+let activePlaybackId: string | null = null;
+let activeResolve: (() => void) | null = null;
+let pendingPlayback: {
+  baseUrl: string;
+  callSessionId: string;
+  ttsId: string;
+  apiKey: string;
+  force: boolean;
+} | null = null;
+
+function finishActivePlayback() {
+  if (activeResolve) activeResolve();
+  activeResolve = null;
+  activePlaybackId = null;
+  activeAudio = null;
+  const next = pendingPlayback;
+  pendingPlayback = null;
+  if (next) {
+    playAgentSpeech(next.baseUrl, next.callSessionId, next.ttsId, next.apiKey, next.force);
+  }
+}
+
 export function playAgentSpeech(
   baseUrl: string,
   callSessionId: string,
   ttsId: string,
-  apiKey: string
+  apiKey: string,
+  force = false
 ): Promise<void> {
+  // Hangup / final farewell interrupts whatever is currently playing so the
+  // customer always hears the agent's last line before the call ends.
+  if (force && activePlaybackId !== null) {
+    const wasAudio = activeAudio;
+    const wasResolve = activeResolve;
+    activeResolve = null;
+    if (wasAudio) {
+      try {
+        wasAudio.pause();
+      } catch {
+        /* noop */
+      }
+    }
+    if (wasResolve) wasResolve();
+    activePlaybackId = null;
+    activeAudio = null;
+  }
+
+  if (activePlaybackId !== null) {
+    // Newest-wins: remember the latest utterance and play it once the current
+    // one finishes, so the agent never talks over itself.
+    pendingPlayback = { baseUrl, callSessionId, ttsId, apiKey, force };
+    return Promise.resolve();
+  }
+
+  activePlaybackId = ttsId;
   const url =
     `${baseUrl}/api/v1/call/${encodeURIComponent(callSessionId)}/tts/${encodeURIComponent(ttsId)}`;
   return new Promise((resolve) => {
+    activeResolve = resolve;
     fetch(url, { headers: { 'X-API-Key': apiKey } })
       .then((res) => {
         if (!res.ok) throw new Error(`TTS fetch failed: ${res.status}`);
@@ -213,20 +270,25 @@ export function playAgentSpeech(
       })
       .then((blob) => {
         const audio = new Audio(URL.createObjectURL(blob));
-        audio.onended = () => resolve();
+        activeAudio = audio;
+        const done = () => {
+          if (activeResolve === resolve) finishActivePlayback();
+          else if (activeAudio === audio) activeAudio = null;
+        };
+        audio.onended = done;
         audio.onerror = () => {
           console.error(`[TTS] playback error for ${ttsId}`);
-          resolve();
+          done();
         };
         audio.play().catch((err) => {
           // Autoplay policies can reject play() — surface it instead of hiding it.
           console.error(`[TTS] play() blocked for ${ttsId}:`, err?.message || err);
-          resolve();
+          done();
         });
       })
       .catch((err) => {
         console.error(`[TTS] failed to load ${ttsId}:`, err?.message || err);
-        resolve();
+        if (activeResolve === resolve) finishActivePlayback();
       });
   });
 }

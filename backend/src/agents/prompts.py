@@ -40,6 +40,20 @@ def get_phone_dialogue_guide() -> str:
     return load_skill_file("phone_dialogue_guide.md")
 
 
+def get_phishing_playbook() -> str:
+    """Retrieve the phishing detection playbook skill content.
+
+    The playbook (backend/skills/phishing_detection_playbook.md) is the single
+    source of truth for the Phishing Worker: the rule engine reads its keyword
+    columns and the LLM system prompt reads its archetype guidance, so the two
+    detection paths can never drift apart.
+
+    Returns:
+        The content of phishing_detection_playbook.md as a string.
+    """
+    return load_skill_file("phishing_detection_playbook.md")
+
+
 def get_anchor_questions() -> list[dict[str, Any]]:
     """Parse anchor questions from anchor_questions.md skill file.
 
@@ -548,8 +562,8 @@ Rules:
 - NEVER reveal you are an AI, an anti-scam system, or that the call is monitored. NEVER give out personal or financial information. NEVER agree to any transfer.
 - Use the phone dialogue guide to decide how to stall, deflect, or verify.
 - Decide whether the caller's latest reply reveals a scam signal (per the anchor question's "scam signal if" description). If a signal is confirmed — e.g. the caller demands a transfer to a safe account, forbids hanging up, or pressures for immediate action — set "signal_detected": true and "suspicion_delta" accordingly.
-- If the scam signal is clearly CONFIRMED (not just suspicious), set "action": "hangup" and make your reply a short firm goodbye.
-- Otherwise set "action": "continue".
+- Set "action": "hangup" ONLY when the caller has EXPLICITLY demanded money or a financial action — e.g. "send me money", "transfer to a safe account", asking for card/OTP details, or threatening arrest / forbidding you from hanging up. Identity-verification failure alone (e.g. the caller says they are "not an employee" or refuses to give an ID) is NOT enough to hang up — keep the conversation going and probe further.
+- When "action" is "hangup", make your reply a short firm goodbye. Otherwise set "action": "continue".
 
 Respond in strict JSON only, with no markdown fences:
 {
@@ -599,6 +613,12 @@ def build_autotalk_response_prompt(
 
     asked = list(aq_progress.get("asked") or [])
 
+    # C) Dampen the cumulative score the LLM sees. The live suspicion counter
+    # pegs at 100 after only a couple of utterances, which strongly biases the
+    # model toward hanging up. Cap it and mark it informational so the hangup
+    # decision rests on the caller's actual words, not the score alone.
+    display_suspicion = min(int(suspicion or 0), 60)
+
     return f"""ANCHOR QUESTION SCHEDULE (use in order, adapt naturally):
 {aq_schedule}
 
@@ -610,7 +630,8 @@ CONVERSATION SO FAR:
 
 ANCHOR QUESTIONS ALREADY ASKED: {', '.join(asked) if asked else 'none yet'}
 
-CUMULATIVE SUSPICION SCORE: {suspicion} / 100
+CUMULATIVE SUSPICION SCORE: {display_suspicion} / 100 (informational only — do NOT
+decide to hang up based on this score alone; base the decision on the caller's words)
 
 Decide what the agent should say next, which anchor question (if any) to advance to,
 and whether the caller's latest reply confirms a scam signal. Return the strict JSON object."""

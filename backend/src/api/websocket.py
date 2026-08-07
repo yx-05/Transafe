@@ -44,9 +44,15 @@ async def ws_session_stream(websocket: WebSocket, session_id: str) -> None:
     user_id = session_data.get("user_id", "usr-123") if session_data else "usr-123"
     payload = session_data.get("payload", {}) if session_data else {}
 
-    await websocket.accept()
-
-    try:
+    if trigger_type == "PHISHING":
+        status_steps = [
+            "Orchestrator: routing PHISHING trigger to worker nodes...",
+            "Phishing Analyst Worker: extracting text and visual indicators from the uploaded material...",
+            "Research Worker: checking blacklist lists, fraud memory, and suspicious link evidence...",
+            "Risk Scorer: computing weighted phishing risk score...",
+            "Explainable AI: compiling phishing explanation report...",
+        ]
+    else:
         status_steps = [
             f"Orchestrator: routing {trigger_type} trigger to worker nodes...",
             "Financial Worker: querying 90-day transaction history...",
@@ -56,6 +62,9 @@ async def ws_session_stream(websocket: WebSocket, session_id: str) -> None:
             "Explainable AI: compiling verdict explanation report...",
         ]
 
+    await websocket.accept()
+
+    try:
         for step in status_steps:
             status_msg = {
                 "type": "status",
@@ -92,13 +101,37 @@ async def ws_session_stream(websocket: WebSocket, session_id: str) -> None:
             "associated_case_context": None,
         }
 
-        # Invoke compiled LangGraph pipeline if available in app state
+        # Invoke compiled LangGraph pipeline if available in app state.
+        # Stream per-node updates live so REAL agent status messages (including
+        # "Orchestrator: linked active case ... context") reach the UI instead of
+        # only the placeholder steps sent above. The dispatcher node's update
+        # carries the finalized xai_report.
         xai_report = None
         compiled_graph = getattr(websocket.app.state, "compiled_graph", None)
         if compiled_graph:
             try:
-                final_state = await compiled_graph.ainvoke(initial_state)
-                xai_report = final_state.get("xai_report")
+                sent_statuses: set[str] = set()
+                async for update in compiled_graph.astream(
+                    initial_state, stream_mode="updates"
+                ):
+                    for node_name, node_output in update.items():
+                        if not isinstance(node_output, dict):
+                            continue
+                        for msg in node_output.get("status_messages") or []:
+                            if msg in sent_statuses:
+                                continue
+                            sent_statuses.add(msg)
+                            await websocket.send_json(
+                                {
+                                    "type": "status",
+                                    "session_id": session_id,
+                                    "message": msg,
+                                    "worker": node_name,
+                                    "timestamp": datetime.now(UTC).isoformat(),
+                                }
+                            )
+                        if node_output.get("xai_report"):
+                            xai_report = node_output["xai_report"]
             except Exception as e:
                 print(f"[WebSocket] LangGraph execution error: {e}")
 

@@ -6,55 +6,78 @@ import pytest
 
 from src.services.stt import transcribe_audio_chunk
 from src.services.tavily import TARGET_DOMAINS, tavily_search
-from src.services.tts import synthesize_text_to_audio
-from src.services.vision import extract_text_from_image
+from src.services.tts import (
+    get_elevenlabs_api_keys,
+    synthesize_agent_speech,
+    synthesize_text_to_audio,
+)
+from src.services.vision import analyze_image, extract_text_from_image
 
 
 # -------------------------------------------------------------------
 # Vision OCR Tests
 # -------------------------------------------------------------------
-@pytest.mark.asyncio
-@patch("src.services.vision.groq_client")
-async def test_extract_text_from_image_success(mock_groq: MagicMock) -> None:
+@patch("src.services.vision._get_groq_client")
+def test_extract_text_from_image_success(mock_groq: MagicMock) -> None:
     """Assert vision OCR extraction handles base64 image strings properly."""
     mock_choice = MagicMock()
     mock_choice.message.content = "URGENT: Verify account at http://scam.xyz"
-    mock_groq.chat.completions.create.return_value.choices = [mock_choice]
+    client = mock_groq.return_value
+    client.chat.completions.create.return_value.choices = [mock_choice]
 
-    result = await extract_text_from_image("fake_base64_string")
+    result = extract_text_from_image("fake_base64_string")
 
     assert "URGENT: Verify account" in result
-    mock_groq.chat.completions.create.assert_called_once()
-    call_kwargs = mock_groq.chat.completions.create.call_args.kwargs
+    client.chat.completions.create.assert_called_once()
+    call_kwargs = client.chat.completions.create.call_args.kwargs
     assert call_kwargs["model"] == "llama-3.2-11b-vision-preview"
     message_content = call_kwargs["messages"][0]["content"]
     assert message_content[1]["image_url"]["url"] == "data:image/jpeg;base64,fake_base64_string"
 
 
-@pytest.mark.asyncio
-@patch("src.services.vision.groq_client")
-async def test_extract_text_from_image_with_data_prefix(mock_groq: MagicMock) -> None:
+@patch("src.services.vision._get_groq_client")
+def test_extract_text_from_image_with_data_prefix(mock_groq: MagicMock) -> None:
     """Assert vision OCR preserves existing data prefix."""
     mock_choice = MagicMock()
     mock_choice.message.content = "Extracted OCR text"
-    mock_groq.chat.completions.create.return_value.choices = [mock_choice]
+    client = mock_groq.return_value
+    client.chat.completions.create.return_value.choices = [mock_choice]
 
     prefixed_base64 = "data:image/png;base64,abc123data"
-    result = await extract_text_from_image(prefixed_base64)
+    result = extract_text_from_image(prefixed_base64)
 
     assert result == "Extracted OCR text"
-    call_kwargs = mock_groq.chat.completions.create.call_args.kwargs
+    call_kwargs = client.chat.completions.create.call_args.kwargs
     message_content = call_kwargs["messages"][0]["content"]
     assert message_content[1]["image_url"]["url"] == prefixed_base64
 
 
-@pytest.mark.asyncio
-@patch("src.services.vision.groq_client")
-async def test_extract_text_from_image_empty(mock_groq: MagicMock) -> None:
+@patch("src.services.vision._get_groq_client")
+def test_extract_text_from_image_empty(mock_groq: MagicMock) -> None:
     """Assert empty base64 string returns empty string without API call."""
-    result = await extract_text_from_image("")
+    result = extract_text_from_image("")
     assert result == ""
     mock_groq.chat.completions.create.assert_not_called()
+
+
+@patch("src.services.vision._get_groq_client")
+def test_analyze_image_uses_qwen_model_and_json_output(mock_groq: MagicMock) -> None:
+    """Assert qwen vision analysis is used for phishing image interpretation."""
+    mock_choice = MagicMock()
+    mock_choice.message.content = (
+        '{"extracted_text": "URGENT: Verify now", "description": "Urgency banner and lookalike bank login form."}'
+    )
+    client = mock_groq.return_value
+    client.chat.completions.create.return_value.choices = [mock_choice]
+
+    result = analyze_image("fake_base64_string")
+
+    assert result["extracted_text"] == "URGENT: Verify now"
+    assert "lookalike bank login form" in result["description"]
+    call_kwargs = client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["model"] == "qwen/qwen3.6-27b"
+    message_content = call_kwargs["messages"][0]["content"]
+    assert message_content[1]["image_url"]["url"] == "data:image/jpeg;base64,fake_base64_string"
 
 
 # -------------------------------------------------------------------
@@ -139,6 +162,111 @@ async def test_synthesize_text_to_audio_empty(mock_communicate_cls: MagicMock) -
     audio_bytes = await synthesize_text_to_audio("")
     assert audio_bytes == b""
     mock_communicate_cls.assert_not_called()
+
+
+# -------------------------------------------------------------------
+# ElevenLabs TTS (primary) + edge-tts fallback tests
+# -------------------------------------------------------------------
+@patch.dict(
+    "os.environ",
+    {
+        "ELEVENLAB_API_KEY": "sk_test_base",
+        "ELEVENLAB_API_KEY_1": "sk_test_one",
+        "ELEVENLAB_API_KEY_2": "sk_test_two",
+        "ELEVENLAB_API_KEYS": "sk_comma_a, sk_comma_b",
+    },
+    clear=False,
+)
+@patch("src.services.tts.load_dotenv")
+def test_get_elevenlabs_api_keys_pool(mock_load: MagicMock) -> None:
+    """Assert the ElevenLabs key pool dedupes and filters all env sources."""
+    keys = get_elevenlabs_api_keys()
+    assert "sk_test_base" in keys
+    assert "sk_test_one" in keys
+    assert "sk_test_two" in keys
+    assert "sk_comma_a" in keys
+    assert "sk_comma_b" in keys
+    assert len(keys) == len(set(keys))  # deduped
+
+
+@patch.dict(
+    "os.environ",
+    {"ELEVENLAB_API_KEY": "sk_test_only"},
+    clear=False,
+)
+@patch("src.services.tts.load_dotenv")
+def test_get_elevenlabs_api_keys_filters_non_sk(mock_load: MagicMock) -> None:
+    """Assert non-`sk_` prefixed values are filtered out of the pool."""
+    keys = get_elevenlabs_api_keys()
+    assert "sk_test_only" in keys
+    assert not any(k and not k.startswith("sk_") for k in keys)
+
+
+@patch.dict(
+    "os.environ",
+    {},
+    clear=True,
+)
+@patch("src.services.tts.load_dotenv")
+def test_get_elevenlabs_api_keys_empty_returns_empty(mock_load: MagicMock) -> None:
+    """Assert an empty environment yields no ElevenLabs keys."""
+    assert get_elevenlabs_api_keys() == []
+
+
+@pytest.mark.asyncio
+@patch("src.services.tts.synthesize_text_to_audio_elevenlabs")
+@patch("src.services.tts.edge_tts.Communicate")
+async def test_synthesize_agent_speech_uses_elevenlabs_first(
+    mock_communicate_cls: MagicMock,
+    mock_elevenlabs: MagicMock,
+) -> None:
+    """Assert agent speech prefers ElevenLabs and skips edge-tts on success."""
+    mock_elevenlabs.return_value = b"elevenlabs_mp3_bytes"
+    audio_bytes = await synthesize_agent_speech("Amaran: Panggilan penipuan dikesan.")
+
+    assert audio_bytes == b"elevenlabs_mp3_bytes"
+    mock_elevenlabs.assert_awaited_once_with("Amaran: Panggilan penipuan dikesan.")
+    mock_communicate_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("src.services.tts.synthesize_text_to_audio_elevenlabs")
+@patch("src.services.tts.edge_tts.Communicate")
+async def test_synthesize_agent_speech_falls_back_to_edge_tts(
+    mock_communicate_cls: MagicMock,
+    mock_elevenlabs: MagicMock,
+) -> None:
+    """Assert agent speech falls back to Microsoft edge-tts when ElevenLabs fails."""
+
+    async def mock_stream():
+        yield {"type": "audio", "data": b"fallback_audio"}
+        yield {"type": "audio", "data": b"_bytes"}
+
+    mock_elevenlabs.side_effect = RuntimeError("All keys out of credits")
+    mock_instance = MagicMock()
+    mock_instance.stream.side_effect = mock_stream
+    mock_communicate_cls.return_value = mock_instance
+
+    audio_bytes = await synthesize_agent_speech(
+        "Amaran: Panggilan penipuan dikesan.", voice="ms-MY-YasminNeural"
+    )
+
+    assert audio_bytes == b"fallback_audio_bytes"
+    mock_elevenlabs.assert_awaited_once()
+    mock_communicate_cls.assert_called_once_with(
+        "Amaran: Panggilan penipuan dikesan.", "ms-MY-YasminNeural"
+    )
+
+
+@pytest.mark.asyncio
+@patch("src.services.tts.synthesize_text_to_audio_elevenlabs")
+async def test_synthesize_agent_speech_empty_skips_elevenlabs(
+    mock_elevenlabs: MagicMock,
+) -> None:
+    """Assert empty agent speech returns early without calling any provider."""
+    audio_bytes = await synthesize_agent_speech("")
+    assert audio_bytes == b""
+    mock_elevenlabs.assert_not_called()
 
 
 # -------------------------------------------------------------------

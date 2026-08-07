@@ -31,6 +31,16 @@ export const PhishingCard: React.FC<PhishingCardProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Backend rejects images whose decoded bytes exceed 10 MB.
+    if (file.size > 10 * 1024 * 1024) {
+      const sizeMb = (file.size / 1024 / 1024).toFixed(1);
+      setStatusLog([`Image rejected: ${sizeMb} MB exceeds the 10 MB upload limit.`]);
+      setImageBase64('');
+      setImagePreview(null);
+      e.target.value = '';
+      return;
+    }
+
     const reader = new FileReader();
     reader.onloadend = () => {
       const b64 = reader.result as string;
@@ -60,13 +70,18 @@ export const PhishingCard: React.FC<PhishingCardProps> = ({
     const client = new TranSafeApiClient(config);
     const sessionId = `sess-phish-${Date.now()}`;
 
+    // Map the UI source tab to the backend material.source taxonomy.
+    const source =
+      sourceType === 'TEXT' ? 'SMS' : sourceType === 'URL' ? 'WEBSITE' : 'OTHER';
+
     try {
       await client.triggerPhishing({
         user_id: userId,
         session_id: sessionId,
-        phishing_material: {
-          source_type: sourceType,
+        material: {
+          content_type: sourceType,
           content: contentToSend,
+          source,
         },
       });
 
@@ -195,6 +210,26 @@ export const PhishingCard: React.FC<PhishingCardProps> = ({
             </button>
           </div>
           <p>{result.verdict_summary}</p>
+          {result.worker_findings?.length > 0 && (
+            <div className="finding-panel">
+              <h5>Indicators found</h5>
+              <div className="findings-grid">
+                {result.worker_findings.map((finding) => (
+                  <div key={finding.worker} className={`finding-card ${finding.score >= 70 ? 'high-risk' : ''}`}>
+                    <div className="finding-header">
+                      <span>{finding.worker}</span>
+                      <span>{finding.score}/100</span>
+                    </div>
+                    <ul className="evidence-list">
+                      {finding.evidence.map((item, index) => (
+                        <li key={`${finding.worker}-${index}`}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

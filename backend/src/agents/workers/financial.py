@@ -193,11 +193,17 @@ def financial_worker_node(state: GraphState) -> dict[str, Any]:
     except Exception as err:  # noqa: BLE001
         logger.debug(f"Financial LLM invocation skipped or failed, using rule base: {err}")
 
-    # Hard enforcement: Assert financial_worker_node overrides score to 95+ when recipient_account matches case_context
-    if _check_case_context_match(recipient_account, case_context) and finding.score < 95:
-        finding.score = 98
+    # Hard enforcement: A recipient account matching the linked case's context
+    # (scam call transcript / phishing material) is a severe coercion signal.
+    # Force score to 98 and surface the CRITICAL evidence even when the LLM
+    # already returned a high score, so downstream risk scoring can rely on it.
+    if _check_case_context_match(recipient_account, case_context):
+        finding.score = max(finding.score, 98)
         finding.confidence = max(finding.confidence, 0.95)
-        match_ev = f"Recipient account {recipient_account} matches active call transcript or phishing case context"
+        match_ev = (
+            f"Recipient account {recipient_account} matches active call "
+            "transcript or phishing case context"
+        )
         if not any(match_ev in e for e in finding.evidence):
             finding.evidence.insert(0, match_ev)
 

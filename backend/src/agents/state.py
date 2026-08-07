@@ -21,7 +21,7 @@ class GraphState(TypedDict, total=False):
     session_id: str
     user_id: str
     created_at: str
-    trigger_type: Literal["TELEMETRY", "TRANSACTION", "CALL", "PHISHING", "REPORT"]
+    trigger_type: Literal["TELEMETRY", "TRANSACTION", "CALL", "PHISHING"]
     trigger_payload: dict[str, Any]
     workers_to_activate: list[str]
     telemetry_finding: dict[str, Any] | None
@@ -29,6 +29,10 @@ class GraphState(TypedDict, total=False):
     financial_finding: dict[str, Any] | None
     phone_finding: dict[str, Any] | None
     phishing_finding: dict[str, Any] | None
+    # Phishing worker image-analysis artifacts (never persisted raw; the
+    # dispatcher stores only these + the analysis result).
+    phishing_ocr_text: str | None
+    phishing_image_description: str | None
     risk_score: int | None
     risk_tier: Literal["LOW", "MEDIUM", "HIGH"] | None
     xai_report: dict[str, Any] | None

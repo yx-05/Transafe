@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import type { BackendConfig, XaiReport } from '../../types/api';
+import type { BackendConfig, RecentCaseItem, XaiReport } from '../../types/api';
 import { TranSafeApiClient } from '../../services/api';
 import { SessionWebSocketClient } from '../../services/websocket';
 import { PassiveTelemetryTracker } from '../../services/telemetryTracker';
-import { Send, Clock, FileSpreadsheet, Database, User } from 'lucide-react';
+import { Send, Clock, FileSpreadsheet, Database, User, RefreshCw, Link2 } from 'lucide-react';
 
 interface TransactionCardProps {
   config: BackendConfig;
@@ -33,6 +33,33 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({
   const [statusLog, setStatusLog] = useState<string[]>([]);
   const [currentResult, setCurrentResult] = useState<XaiReport | null>(null);
   const [coolingOffTimer, setCoolingOffTimer] = useState<number | null>(null);
+
+  // Linkable evidence cases (CALL / PHISHING / REPORT — NOT transactions, those
+  // are the result of this flow, not the source evidence).
+  const [linkableCases, setLinkableCases] = useState<RecentCaseItem[]>([]);
+  const [casesLoading, setCasesLoading] = useState(false);
+
+  const loadLinkableCases = async () => {
+    setCasesLoading(true);
+    try {
+      const client = new TranSafeApiClient(config);
+      const data = await client.getRecentCases(userId);
+      const cases = (data?.recent_cases ?? []).filter(
+        (c) => c.trigger_type !== 'TRANSACTION' && c.case_id
+      );
+      setLinkableCases(cases);
+    } catch (e) {
+      console.error('Failed to load linkable cases', e);
+      setLinkableCases([]);
+    } finally {
+      setCasesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadLinkableCases();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.baseUrl, config.apiKey, userId]);
 
   useEffect(() => {
     const telemetry = new PassiveTelemetryTracker(config, userId, activeSessionId);
@@ -288,13 +315,49 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({
 
         <div className="form-row">
           <div className="form-group">
-            <label>Associated Scam Call / Case ID (Optional Relay)</label>
-            <input
-              type="text"
-              value={associatedCaseId}
-              onChange={(e) => setAssociatedCaseId(e.target.value)}
-              placeholder="e.g. call-1785423180"
-            />
+            <label>
+              Associated Scam Call / Case ID (Optional Relay)
+            </label>
+            <div className="case-relay-row">
+              <select
+                className="case-relay-select"
+                value={associatedCaseId}
+                onChange={(e) => setAssociatedCaseId(e.target.value)}
+                disabled={casesLoading}
+              >
+                <option value="">— No linked case —</option>
+                {linkableCases.map((c) => (
+                  <option key={c.case_id} value={c.case_id}>
+                    {c.trigger_type} · {c.case_id.slice(0, 12)}… · {c.risk_tier}
+                    {c.user_label === 'fraud' ? ' · ⚑ confirmed fraud' : ''}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="btn-tiny case-relay-refresh"
+                onClick={loadLinkableCases}
+                disabled={casesLoading}
+                title="Refresh linkable cases"
+              >
+                <RefreshCw size={13} />
+                {casesLoading ? 'Loading…' : 'Refresh'}
+              </button>
+            </div>
+            {associatedCaseId && (
+              <div className="case-relay-hint">
+                <Link2 size={12} />
+                <span>
+                  {linkableCases.find((c) => c.case_id === associatedCaseId)?.snippet ||
+                    'Linked case selected — its transcripts & extracted accounts will be checked against this transfer.'}
+                </span>
+              </div>
+            )}
+            {linkableCases.length === 0 && !casesLoading && (
+              <div className="case-relay-hint muted">
+                No call/phishing cases yet — run a scam call or analyze phishing material first, then link it here.
+              </div>
+            )}
           </div>
         </div>
 

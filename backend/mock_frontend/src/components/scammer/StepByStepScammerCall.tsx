@@ -219,7 +219,8 @@ export const StepByStepScammerCall: React.FC<StepByStepScammerCallProps> = ({
               // Use the session id from the event itself — the `callSessionId`
               // state captured in this WS callback closure is STALE (still null
               // from the pre-render), so the old guard silently skipped TTS.
-              playAgentSpeech(config.baseUrl, msg.call_session_id, msg.tts_id, config.apiKey).catch(() => {});
+              // force=true for the hangup farewell so it is always heard.
+              playAgentSpeech(config.baseUrl, msg.call_session_id, msg.tts_id, config.apiKey, msg.action === 'hangup').catch(() => {});
             }
           }
           if (msg.type === 'call_ended') {

@@ -17,6 +17,10 @@ backend/
 ├── .env                    ← Environment credentials (gitignored)
 ├── src/
 │   ├── api/
+│   │   ├── admin.py        ← Admin endpoints
+│   │   ├── auth.py         ← Authentication
+│   │   ├── dependencies.py ← Common FastAPI dependencies
+│   │   ├── session_store.py← Active session store
 │   │   ├── triggers.py     ← Trigger endpoints (/api/v1/trigger/*)
 │   │   ├── websocket.py    ← Core session WebSocket (/ws/session/*)
 │   │   └── websocket_call.py ← WebRTC call WebSockets (/ws/call/*)
@@ -47,20 +51,35 @@ Initializes the FastAPI application, mounts CORS middlewares, compiles the LangG
 
 ```python
 import os
+import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from src.api import triggers, websocket, websocket_call
+
+from src.api import triggers, websocket, websocket_call, admin, auth
 from src.agents.graph import compile_graph
-from src.db.supabase import init_supabase
-from src.db.vector_store import init_vector_store
 
 load_dotenv()
+
+class EndpointFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.args and len(record.args) >= 3 and record.args[2] != "/api/v1/call/active"
+
+# Filter noisy polling logs
+logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Pre-compile the LangGraph graph
+    app.state.compiled_graph = compile_graph()
+    yield
 
 app = FastAPI(
     title="TranSafe API",
     version="1.0.0",
-    description="Multi-Agent Banking Fraud Prevention Backend"
+    description="Multi-Agent Banking Fraud Prevention Backend",
+    lifespan=lifespan
 )
 
 # CORS configuration
@@ -72,37 +91,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# API Key Middleware
-async def verify_api_key(x_api_key: str = Header(...)):
-    if x_api_key != os.getenv("API_KEY"):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API Key"
-        )
-    return x_api_key
+# API Key Middleware (handled via dependencies in routes typically)
 
 # Include routers
-app.include_router(triggers.router, prefix="/api/v1", dependencies=[Depends(verify_api_key)])
+app.include_router(auth.router)
+app.include_router(triggers.router, prefix="/api/v1")
+app.include_router(admin.router, prefix="/api/v1/admin")
 app.include_router(websocket.router)
 app.include_router(websocket_call.router)
-
-@app.on_event("startup")
-async def startup_event():
-    # Initialize DB connections
-    init_supabase()
-    init_vector_store()
-    # Pre-compile the LangGraph graph
-    app.state.compiled_graph = compile_graph()
 
 @app.get("/health")
 async def health_check():
     return {
         "status": "healthy",
-        "version": "1.0.0",
-        "services": {
-            "supabase": "connected",
-            "groq": "connected"
-        }
+        "version": "1.0.0"
     }
 ```
 

@@ -4,6 +4,7 @@ export type TriggerType = 'TELEMETRY' | 'TRANSACTION' | 'CALL' | 'PHISHING' | 'R
 export type RiskTier = 'LOW' | 'MEDIUM' | 'HIGH';
 export type CallMode = 'LISTEN' | 'AUTO_TALK';
 export type CallChannel = 'WEBRTC' | 'IN_APP_VOIP';
+export type UserLabel = 'unlabeled' | 'fraud' | 'benign';
 
 export interface BackendConfig {
   baseUrl: string;
@@ -71,27 +72,17 @@ export interface CallTriggerRequest {
 }
 
 export interface PhishingMaterial {
-  source_type: 'TEXT' | 'URL' | 'IMAGE';
+  content_type: 'TEXT' | 'URL' | 'IMAGE';
   content: string; // Plain text, URL, or Base64 image
+  source?: string; // SMS | WHATSAPP | EMAIL | WEBSITE | OTHER
 }
 
-export interface PhishingTriggerRequest {
+export type PhishingTriggerRequest = {
   user_id: string;
   session_id: string;
-  phishing_material: PhishingMaterial;
+  material: PhishingMaterial;
   associated_case_id?: string;
-}
-
-export interface FraudReportPayload {
-  phone_numbers: string[];
-  bank_accounts: string[];
-  description: string;
-}
-
-export interface ReportTriggerRequest {
-  user_id: string;
-  report: FraudReportPayload;
-}
+};
 
 export interface BiometricResultRequest {
   user_id: string;
@@ -140,15 +131,6 @@ export interface PhishingTriggerData {
   estimated_seconds: number;
 }
 
-export interface ReportTriggerData {
-  case_id: string;
-  message: string;
-  entities_recorded: {
-    phone_numbers: string[];
-    bank_accounts: string[];
-  };
-}
-
 export interface BiometricResultData {
   session_id: string;
   transaction_id: string;
@@ -169,12 +151,23 @@ export interface RecentCaseItem {
   trigger_type: TriggerType;
   caller_number?: string;
   risk_tier: RiskTier;
+  risk_score: number;
+  status: string;
+  user_label: UserLabel;
+  archetype?: string;
+  snippet?: string;
   created_at: string;
 }
 
 export interface RecentCasesData {
   has_recent_activity: boolean;
   recent_cases: RecentCaseItem[];
+}
+
+export interface CaseLabelData {
+  case_id: string;
+  user_label: UserLabel;
+  message: string;
 }
 
 // ---------------- EXPLAINABLE AI (XAI) & WS MESSAGES ----------------
@@ -200,6 +193,7 @@ export interface XaiReport {
   unfreeze_at?: string;
   recommendation?: string;
   case_id?: string;
+  associated_case_id?: string;
 }
 
 export interface WsSessionMessage {
@@ -277,7 +271,7 @@ export interface AdminCaseItem {
   status: string;
   action_taken: string;
   created_at: string;
-  verdict_summary: string;
+  verdict_summary: string | null;
 }
 
 export interface AdminCaseListResponse {
@@ -288,6 +282,20 @@ export interface AdminCaseListResponse {
   has_next: boolean;
 }
 
+export interface AdminAccountItem {
+  id?: string;
+  account_number: string;
+  user_id?: string | null;
+  account_type?: string | null;
+  balance_myr?: number | null;
+  status: 'active' | 'frozen' | 'closed';
+  frozen_at?: string | null;
+  frozen_by?: string | null;
+  frozen_reason?: string | null;
+  unfreeze_at?: string | null;
+  created_at?: string;
+}
+
 export interface AccountActionData {
   account_number: string;
   status: 'frozen' | 'active';
@@ -296,6 +304,33 @@ export interface AccountActionData {
   frozen_by?: string;
   unfrozen_by?: string;
   reason: string;
+}
+
+export interface CaseActionData {
+  case_id: string;
+  status: string;
+  action_taken: string;
+  unfreeze_at?: string | null;
+  reason?: string | null;
+}
+
+export interface AdminCaseDetail {
+  case_id?: string;
+  id?: string;
+  user_id: string;
+  trigger_type: TriggerType;
+  risk_score: number;
+  risk_tier: RiskTier;
+  status: string;
+  action_taken: string;
+  created_at?: string;
+  updated_at?: string;
+  transaction_id?: string | null;
+  caller_number?: string | null;
+  phishing_source?: string | null;
+  user_label?: 'unlabeled' | 'fraud' | 'benign' | null;
+  labeled_at?: string | null;
+  xai_report?: Record<string, unknown> | null;
 }
 
 export interface AnalyticsSummary {

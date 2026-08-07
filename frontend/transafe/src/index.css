@@ -1049,6 +1049,12 @@ body {
   color: #f3f4f6;
 }
 
+/* The admin HUD is a dark theme. Override the light .neo-card background
+   (--surface-container-lowest = white) so white/gray text stays readable. */
+.admin-layout .neo-card {
+  background-color: #111827;
+}
+
 @media (max-width: 992px) {
   .admin-layout {
     grid-template-columns: 1fr;

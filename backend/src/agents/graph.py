@@ -24,6 +24,21 @@ def route_workers(state: GraphState) -> list[str] | str:
     return workers
 
 
+def route_after_phishing(state: GraphState) -> str:
+    """After the phishing worker, run the research worker for PHISHING triggers.
+
+    Documented design (PRD §4.4): Phishing Analyst Worker is Stage 1, Research
+    Worker is Stage 2 — it verifies the extracted URLs/domains against internal
+    fraud memory and public blacklists. Running sequentially lets the research
+    worker consume the phishing worker's OCR output (``phishing_ocr_text``),
+    which is essential for IMAGE submissions where the URL only exists inside
+    the screenshot. All other trigger types go straight to the scorer.
+    """
+    if state.get("trigger_type") == "PHISHING":
+        return "research"
+    return "scorer"
+
+
 def compile_graph() -> CompiledStateGraph:
     """Constructs StateGraph(GraphState), wires conditional edges for worker fan-out,
 
@@ -53,7 +68,12 @@ def compile_graph() -> CompiledStateGraph:
     builder.add_edge("research", "scorer")
     builder.add_edge("financial", "scorer")
     builder.add_edge("phone", "scorer")
-    builder.add_edge("phishing", "scorer")
+    # PHISHING: phishing worker → research worker (Stage 2) → scorer.
+    builder.add_conditional_edges(
+        "phishing",
+        route_after_phishing,
+        ["research", "scorer"],
+    )
 
     builder.add_edge("scorer", "xai")
     builder.add_edge("xai", "dispatcher")

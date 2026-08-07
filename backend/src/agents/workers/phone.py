@@ -81,6 +81,42 @@ def _is_filler_utterance(raw_text: str) -> bool:
     return len(meaningful) == 0
 
 
+def _scan_high_risk_phrases(
+    transcript: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int, list[str]]:
+    """Rules-only scan for coercion/danger phrases in a transcript.
+
+    Shared by Listen Mode and Auto-Talk Mode so that scammer utterances are
+    always surfaced with highlight spans in the UI, regardless of the active
+    call mode. Returns (highlight_events, score_increment, evidence).
+    """
+    highlight_events: list[dict[str, Any]] = []
+    score_increment = 0
+    evidence: list[str] = []
+
+    for utt in transcript:
+        raw_text = str(utt.get("text") or utt.get("utterance", ""))
+        speaker = str(utt.get("speaker", "CALLER"))
+        lower_text = raw_text.lower()
+        matched_phrases = [p for p in HIGH_RISK_PHRASES if p in lower_text]
+        if not matched_phrases:
+            continue
+        score_increment += len(matched_phrases) * 30
+        for phrase in matched_phrases:
+            evidence.append(f"Spoken danger phrase detected: '{phrase}' by {speaker}")
+            highlight_events.append({
+                "utterance_id": str(utt.get("utterance_id", f"utt-{len(highlight_events)+1}")),
+                "speaker": speaker,
+                "phrase": phrase,
+                "risk_level": "HIGH",
+                "reason": f"Coercion/scam indicator phrase '{phrase}' spoken by {speaker}",
+                "tag": "fund_transfer_request" if "transfer" in phrase or "account" in phrase else "coercion_threat",
+                "utterance_risk_score": 90,
+            })
+
+    return highlight_events, score_increment, evidence
+
+
 def _run_listen_mode(
     transcript: list[dict[str, Any]],
     caller_number: str,
@@ -97,31 +133,23 @@ def _run_listen_mode(
         score += 50
         evidence.append(f"Caller number '{caller_number}' is blacklisted in internal scam database")
 
-    # Scan transcript for high risk phrases
+    # Scan transcript for high risk phrases (shared rules scanner)
+    rule_events, rule_score_inc, rule_evidence = _scan_high_risk_phrases(transcript)
+    highlight_events.extend(rule_events)
+    score += rule_score_inc
+    evidence.extend(rule_evidence)
+
+    # LLM enrichment pass: span-level risk scoring on every utterance
+    # (rules already produced instant highlights; this adds context spans)
+    seen_rules = set(p.lower() for ev in rule_events for p in [ev.get("phrase", "")])
     for utt in transcript:
         raw_text = str(utt.get("text") or utt.get("utterance", ""))
         speaker = str(utt.get("speaker", "CALLER"))
         lower_text = raw_text.lower()
 
-        matched_phrases = [p for p in HIGH_RISK_PHRASES if p in lower_text]
-        if matched_phrases:
-            score += len(matched_phrases) * 30
-            for phrase in matched_phrases:
-                evidence.append(f"Spoken danger phrase detected: '{phrase}' by {speaker}")
-                highlight_events.append({
-                    "utterance_id": str(utt.get("utterance_id", f"utt-{len(highlight_events)+1}")),
-                    "speaker": speaker,
-                    "phrase": phrase,
-                    "risk_level": "HIGH",
-                    "reason": f"Coercion/scam indicator phrase '{phrase}' spoken by {speaker}",
-                    "tag": "fund_transfer_request" if "transfer" in phrase or "account" in phrase else "coercion_threat",
-                    "utterance_risk_score": 90,
-                })
-
-        # LLM enrichment pass: span-level risk scoring on every utterance
-        # (rules already produced instant highlights; this adds context spans)
         if llm_enrich and not _is_filler_utterance(raw_text):
             try:
+                matched_phrases = [p for p in HIGH_RISK_PHRASES if p in lower_text]
                 prompt_text = build_phone_highlighter_prompt(raw_text)
                 messages = [
                     SystemMessage(content="You are a scam call analyst."),
@@ -142,7 +170,7 @@ def _run_listen_mode(
                         if any(
                             ph_lower == p.lower() or ph_lower in p.lower()
                             for p in matched_phrases
-                        ):
+                        ) or ph_lower in seen_rules:
                             continue
                         highlight_events.append({
                             "utterance_id": str(utt.get("utterance_id", f"utt-{len(highlight_events)+1}")),
@@ -397,13 +425,25 @@ def phone_worker_node(
 
     if call_mode == "AUTO_TALK":
         finding = _analyze_autotalk_mode(transcript, caller_number, pre_check)
+        # Surface rules-based coercion phrase highlights for the scammer's
+        # utterances even in Auto-Talk Mode, so the UI can still mark them.
+        highlights, rule_score_inc, rule_evidence = _scan_high_risk_phrases(transcript)
+        if rule_score_inc:
+            boosted = finding.score + rule_score_inc
+            finding = WorkerFinding(
+                worker=finding.worker,
+                score=min(boosted, 100),
+                confidence=finding.confidence,
+                evidence=list(finding.evidence) + rule_evidence,
+            )
         return {
             "phone_finding": finding.model_dump(),
             "phone_session": {
                 "caller_number": caller_number,
                 "call_mode": call_mode,
                 "pre_check": pre_check,
-                "highlights": [],
+                "highlights": highlights,
+                "highlight_events": highlights,
             },
         }
 

@@ -19,6 +19,7 @@
    - 4.5 POST /api/v1/trigger/report
    - 4.6 POST /api/v1/biometric/result ← biometric challenge callback
    - 4.7 POST /api/v1/call/{session_id}/takeover ← mid-call Listen→AUTO_TALK switch
+   - 4.8 Additional User Endpoints (Call, Biometric, Lookup)
 5. [WebSocket Protocol — Pipeline Stream](#5-websocket-protocol)
 6. [Phone Session WebSocket Protocol](#5b-phone-session-websocket-protocol)
 7. [Admin REST Endpoints](#6-admin-rest-endpoints)
@@ -589,6 +590,21 @@ Report the outcome of a biometric authentication challenge back to the backend. 
 }
 ```
 
+### 4.8 Additional User Endpoints (Call, Biometric, Lookup)
+
+This section summarizes other essential REST endpoints used by the user app:
+
+*   **`POST /api/v1/telemetry/event`**: Used for passive ingestion of continuous background telemetry events (e.g., location changes, device posture).
+*   **`GET /api/v1/call/active`**: Long-polling endpoint for the frontend to detect if an active phone session has been initialized by the system.
+*   **`POST /api/v1/call/{call_session_id}/answer`**: User app signals it has picked up the call.
+*   **`POST /api/v1/call/{call_session_id}/decline`**: User app signals it has declined the call.
+*   **`POST /api/v1/call/reset`**: Hard resets the user's active call state.
+*   **`POST /api/v1/call/{call_session_id}/stt_engine`**: Switches the Speech-to-Text engine (e.g., between groq/deepgram) mid-call.
+*   **`GET /api/v1/call/{call_session_id}/tts/{tts_id}`**: Retrieves synthesized audio chunks.
+*   **`POST /api/v1/cases/{case_id}/label`**: Human-in-the-loop (HITL) endpoint for users to label a case as 'fraud' or 'benign'. Triggers adaptive memory learning.
+*   **`GET /api/v1/user/biometrics/{user_id}`**: Fetches a user's registered biometrics status (fingerprint, face, PIN).
+*   **`POST /api/v1/user/biometrics/register`**: Registers or updates a user's biometric / PIN credentials.
+*   **`GET /api/v1/recipient/lookup`**: Looks up a bank account against the beneficiary database and known scammer lists.
 ---
 
 ## 5. WebSocket Protocol

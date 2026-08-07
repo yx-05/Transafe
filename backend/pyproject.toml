@@ -20,6 +20,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "bcrypt>=4.0.0",
     "PyJWT>=2.8.0",
+    "elevenlabs>=2.62.0",
 ]
 
 [dependency-groups]

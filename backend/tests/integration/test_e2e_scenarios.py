@@ -154,7 +154,7 @@ def test_prd_scenario2_phone_impersonation_call(mock_phone_llm):
 # ============================================================================
 # Scenario 3: Screenshot & Phishing Link Investigation (PRD §3.3 & Agent Flow §6.3)
 # ============================================================================
-@patch("src.services.vision.groq_client")
+@patch("src.services.vision._get_groq_client")
 @patch("src.services.tavily.TavilyClient")
 @patch("src.agents.workers.phishing.llm")
 def test_prd_scenario3_phishing_investigation(
@@ -203,40 +203,6 @@ def test_prd_scenario3_phishing_investigation(
 
 
 # ============================================================================
-# Scenario 4: Victim Fraud Report Ingestion & Vector Memory (PRD §3.4 & DB §2.2)
-# ============================================================================
-@patch("src.db.vector_store.groq_client")
-@patch("src.db.vector_store.supabase_client")
-@patch("src.agents.workers.research.llm")
-def test_prd_scenario4_victim_report_ingestion(
-    mock_research_llm, mock_supabase, mock_groq
-):
-    """PRD Scenario 4: User submits scam report, Research worker ingests and adds to pgvector."""
-    mock_embed_resp = MagicMock()
-    mock_embed_resp.data = [MagicMock(embedding=[0.123] * 768)]
-    mock_groq.embeddings.create.return_value = mock_embed_resp
-
-    mock_llm_resp = MagicMock()
-    mock_llm_resp.content = '{"score": 0, "confidence": 1.0, "evidence": ["Report ingested successfully"], "summary": "Macau Scam caller pretending to be LHDN officer", "extracted_entities": ["+60129990000", "7654321098"]}'
-    mock_research_llm.invoke.return_value = mock_llm_resp
-
-    payload = {
-        "user_id": "usr-report-04",
-        "report": {
-            "description": "Caller phone +60129990000 asked me to transfer money to account 7654321098 claiming tax arrears.",
-            "phone_numbers": ["+60129990000"],
-            "bank_accounts": ["7654321098"],
-            "fraud_type": "MACAU_SCAM",
-            "amount_lost_myr": 4500.0,
-        },
-    }
-
-    response = client.post("/api/v1/trigger/report", json=payload, headers=USER_HEADERS)
-    assert response.status_code == 200
-    assert "case_id" in response.json()["data"]
-
-
-# ============================================================================
 # Scenario 5: Admin Portal & Fraud Operations (PRD §3.5 & API §5)
 # ============================================================================
 @patch("src.db.supabase.get_supabase")
@@ -259,15 +225,28 @@ def test_prd_scenario5_admin_operations(mock_get_supabase):
             "created_at": "2026-07-28T12:00:00Z",
         }
     ]
+    # count_all_cases -> .select("id").execute()
     mock_client.table.return_value.select.return_value.execute.return_value.data = [
-        {"count": 1}
+        {"id": "case-admin-01"}
     ]
 
     res_cases = client.get("/admin/v1/cases", headers=ADMIN_HEADERS)
     assert res_cases.status_code == 200
-    assert res_cases.json()["data"]["total"] >= 1
+    assert res_cases.json()["data"]["total"] == 1
+    assert res_cases.json()["data"]["items"][0]["case_id"] == "case-admin-01"
 
-    # 2. Freeze account
+    # 2. Freeze account (fetch_account_by_number -> .eq().limit().execute())
+    mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
+        {
+            "id": "acc-admin-01",
+            "account_number": "7654321098",
+            "user_id": "usr-1",
+            "account_type": "savings",
+            "balance_myr": 12000.0,
+            "status": "active",
+            "created_at": "2026-07-01T00:00:00Z",
+        }
+    ]
     freeze_payload = {"reason": "Confirmed mule account from police report"}
     res_freeze = client.post(
         "/admin/v1/accounts/7654321098/freeze",
@@ -275,7 +254,8 @@ def test_prd_scenario5_admin_operations(mock_get_supabase):
         headers=ADMIN_HEADERS,
     )
     assert res_freeze.status_code == 200
-    assert res_freeze.json()["data"]["status"].upper() in ["FROZEN", "ACTIVE"]
+    assert res_freeze.json()["data"]["status"] == "frozen"
+    assert res_freeze.json()["data"]["frozen_by"] == "admin"
 
     # 3. Unfreeze account
     unfreeze_payload = {"reason": "Legitimate user verified identity"}
@@ -285,7 +265,7 @@ def test_prd_scenario5_admin_operations(mock_get_supabase):
         headers=ADMIN_HEADERS,
     )
     assert res_unfreeze.status_code == 200
-    assert res_unfreeze.json()["data"]["status"].upper() in ["ACTIVE", "UNFROZEN"]
+    assert res_unfreeze.json()["data"]["status"] == "active"
 
 
 # ============================================================================

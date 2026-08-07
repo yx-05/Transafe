@@ -1,12 +1,33 @@
-"""Admin REST Endpoints for TranSafe Fraud Operations Dashboard."""
+"""Admin REST Endpoints for TranSafe Fraud Operations Dashboard.
 
-import uuid
-from datetime import UTC, datetime
+All endpoints are DB-backed (Supabase) — no mock data. Admin actions
+(freeze/unfreeze accounts, review alerts) persist to real tables.
+"""
+
+import asyncio
+from collections import Counter
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.api.dependencies import verify_admin_key
+from src.db.supabase import (
+    count_all_cases,
+    fetch_account_by_number,
+    fetch_all_accounts,
+    fetch_all_cases_for_analytics,
+    fetch_all_transactions_for_analytics,
+    fetch_fraud_case,
+    fetch_fraud_memory_types,
+    freeze_transactions_by_sender,
+    list_admin_alerts,
+    list_all_cases,
+    unfreeze_transactions_by_sender,
+    update_account_status,
+    update_admin_alert,
+    update_fraud_case_status,
+)
 from src.models.schemas import (
     AccountActionData,
     AccountFreezeRequest,
@@ -20,6 +41,7 @@ from src.models.schemas import (
     AnalyticsSummaryData,
     AnalyticsTrendData,
     AnalyticsTrendPoint,
+    CaseActionData,
     ResponseEnvelope,
 )
 
@@ -40,6 +62,31 @@ def make_envelope(data: Any) -> ResponseEnvelope[Any]:
     )
 
 
+def _verdict_from_case(case: dict[str, Any]) -> str:
+    """Extract a human-readable verdict summary from a fraud case row."""
+    xr = case.get("xai_report")
+    if isinstance(xr, dict):
+        verdict = xr.get("verdict_summary")
+        if verdict:
+            return str(verdict)
+    return ""
+
+
+def _build_admin_case_item(case: dict[str, Any]) -> AdminCaseItem:
+    """Map a fraud_cases DB row to the admin list item."""
+    return AdminCaseItem(
+        case_id=str(case.get("id") or case.get("case_id") or ""),
+        user_id=str(case.get("user_id") or ""),
+        trigger_type=str(case.get("trigger_type") or ""),
+        risk_score=int(case.get("risk_score") or 0),
+        risk_tier=str(case.get("risk_tier") or "LOW"),
+        status=str(case.get("status") or "pending"),
+        action_taken=str(case.get("action_taken") or ""),
+        created_at=str(case.get("created_at") or ""),
+        verdict_summary=_verdict_from_case(case) or None,
+    )
+
+
 @router.get(
     "/cases",
     response_model=ResponseEnvelope[AdminCaseListResponseData],
@@ -49,45 +96,48 @@ async def list_cases(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     risk_tier: str | None = Query("all"),
-    status: str | None = Query("all"),
+    status_filter: str | None = Query("all", alias="status"),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     trigger_type: str | None = Query("all"),
 ) -> ResponseEnvelope[AdminCaseListResponseData]:
-    """List fraud cases with filtering and pagination."""
-    now = datetime.now(UTC).isoformat()
-    mock_items = [
-        AdminCaseItem(
-            case_id="case-101",
-            user_id="usr-123",
-            trigger_type="TRANSACTION",
-            risk_score=82,
-            risk_tier="HIGH",
-            status="frozen",
-            action_taken="FREEZE_30_MIN",
-            created_at=now,
-            verdict_summary="Multiple fraud indicators detected...",
-        ),
-        AdminCaseItem(
-            case_id="case-102",
-            user_id="usr-456",
-            trigger_type="CALL",
-            risk_score=91,
-            risk_tier="HIGH",
-            status="reported",
-            action_taken="FREEZE_30_MIN",
-            created_at=now,
-            verdict_summary="Macau impersonation scam call detected.",
-        ),
-    ]
+    """List real fraud cases from the DB with filtering and pagination."""
+    offset = (page - 1) * page_size
+    cases = await asyncio.to_thread(
+        list_all_cases,
+        page_size,
+        offset,
+        risk_tier or "all",
+        status_filter or "all",
+        trigger_type or "all",
+    )
 
+    # Post-query date filtering (created_at) applied in Python since
+    # PostgREST range filtering on ISO strings is unreliable for partial dates.
+    if date_from or date_to:
+        filtered: list[dict[str, Any]] = []
+        for case in cases:
+            created = str(case.get("created_at") or "")[:10]
+            if date_from and created < date_from[:10]:
+                continue
+            if date_to and created > date_to[:10]:
+                continue
+            filtered.append(case)
+        cases = filtered
+
+    total = await asyncio.to_thread(
+        count_all_cases,
+        risk_tier or "all",
+        status_filter or "all",
+        trigger_type or "all",
+    )
     return make_envelope(
         AdminCaseListResponseData(
-            items=mock_items,
-            total=len(mock_items),
+            items=[_build_admin_case_item(c) for c in cases],
+            total=total,
             page=page,
             page_size=page_size,
-            has_next=False,
+            has_next=(page * page_size) < total,
         )
     )
 
@@ -100,26 +150,70 @@ async def list_cases(
 async def get_case_detail(
     case_id: str,
 ) -> ResponseEnvelope[dict[str, Any]]:
-    """Retrieve full detail for a single fraud case."""
-    now = datetime.now(UTC).isoformat()
-    data = {
-        "case_id": case_id,
-        "user_id": "usr-123",
-        "trigger_type": "TRANSACTION",
-        "risk_score": 82,
-        "risk_tier": "HIGH",
-        "status": "frozen",
-        "action_taken": "FREEZE_30_MIN",
-        "unfreeze_at": now,
-        "xai_report": {
-            "verdict_summary": "Suspicious transaction to known scam account.",
-            "risk_score": 82,
-            "risk_tier": "HIGH",
-        },
-        "created_at": now,
-        "updated_at": now,
-    }
-    return make_envelope(data)
+    """Retrieve full real detail for a single fraud case (incl. XAI report)."""
+    case = await asyncio.to_thread(fetch_fraud_case, case_id)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "CASE_NOT_FOUND", "message": f"Case {case_id} not found."},
+        )
+    return make_envelope(case)
+
+
+@router.post(
+    "/cases/{case_id}/freeze",
+    response_model=ResponseEnvelope[CaseActionData],
+    status_code=status.HTTP_200_OK,
+)
+async def freeze_case(
+    case_id: str,
+    payload: AccountFreezeRequest,
+) -> ResponseEnvelope[CaseActionData]:
+    """Freeze a fraud case: update its status/action in the DB."""
+    case = await asyncio.to_thread(fetch_fraud_case, case_id)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "CASE_NOT_FOUND", "message": f"Case {case_id} not found."},
+        )
+    await asyncio.to_thread(update_fraud_case_status, case_id, "frozen", "FREEZE_30_MIN")
+    unfreeze_at = (datetime.now(UTC) + timedelta(minutes=30)).isoformat() + "Z"
+    return make_envelope(
+        CaseActionData(
+            case_id=case_id,
+            status="frozen",
+            action_taken="FREEZE_30_MIN",
+            unfreeze_at=unfreeze_at,
+            reason=payload.reason,
+        )
+    )
+
+
+@router.post(
+    "/cases/{case_id}/unfreeze",
+    response_model=ResponseEnvelope[CaseActionData],
+    status_code=status.HTTP_200_OK,
+)
+async def unfreeze_case(
+    case_id: str,
+    payload: AccountUnfreezeRequest,
+) -> ResponseEnvelope[CaseActionData]:
+    """Unfreeze a fraud case: update its status/action in the DB."""
+    case = await asyncio.to_thread(fetch_fraud_case, case_id)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "CASE_NOT_FOUND", "message": f"Case {case_id} not found."},
+        )
+    await asyncio.to_thread(update_fraud_case_status, case_id, "approved", "APPROVE")
+    return make_envelope(
+        CaseActionData(
+            case_id=case_id,
+            status="approved",
+            action_taken="APPROVE",
+            reason=payload.reason,
+        )
+    )
 
 
 @router.post(
@@ -131,13 +225,34 @@ async def freeze_account(
     account: str,
     payload: AccountFreezeRequest,
 ) -> ResponseEnvelope[AccountActionData]:
-    """Admin-initiated freeze of a bank account."""
-    now = datetime.now(UTC).isoformat()
+    """Admin-initiated freeze of a bank account (persisted to accounts table)."""
+    account_row = await asyncio.to_thread(fetch_account_by_number, account)
+    if not account_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "ACCOUNT_NOT_FOUND",
+                "message": f"Account {account} not found.",
+            },
+        )
+    now = datetime.now(UTC)
+    frozen_at = now.isoformat()
+    unfreeze_at = (now + timedelta(minutes=30)).isoformat()
+    await asyncio.to_thread(
+        update_account_status,
+        account,
+        "frozen",
+        frozen_at,
+        "admin",
+        payload.reason,
+        unfreeze_at,
+    )
+    await asyncio.to_thread(freeze_transactions_by_sender, account, 1800)
     return make_envelope(
         AccountActionData(
             account_number=account,
             status="frozen",
-            frozen_at=now,
+            frozen_at=now.isoformat(),
             frozen_by="admin",
             reason=payload.reason,
         )
@@ -153,17 +268,39 @@ async def unfreeze_account(
     account: str,
     payload: AccountUnfreezeRequest,
 ) -> ResponseEnvelope[AccountActionData]:
-    """Admin-initiated unfreeze of a bank account."""
-    now = datetime.now(UTC).isoformat()
+    """Admin-initiated unfreeze of a bank account (persisted to accounts table)."""
+    account_row = await asyncio.to_thread(fetch_account_by_number, account)
+    if not account_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "ACCOUNT_NOT_FOUND",
+                "message": f"Account {account} not found.",
+            },
+        )
+    now = datetime.now(UTC)
+    await asyncio.to_thread(update_account_status, account, "active")
+    await asyncio.to_thread(unfreeze_transactions_by_sender, account)
     return make_envelope(
         AccountActionData(
             account_number=account,
             status="active",
-            unfrozen_at=now,
+            unfrozen_at=now.isoformat(),
             unfrozen_by="admin",
             reason=payload.reason,
         )
     )
+
+
+@router.get(
+    "/accounts",
+    response_model=ResponseEnvelope[dict[str, Any]],
+    status_code=status.HTTP_200_OK,
+)
+async def list_accounts() -> ResponseEnvelope[dict[str, Any]]:
+    """List real bank accounts from the DB for the admin workbench."""
+    accounts = await asyncio.to_thread(fetch_all_accounts, 500)
+    return make_envelope({"items": accounts, "total": len(accounts)})
 
 
 @router.post("/transactions/auto-unfreeze", status_code=status.HTTP_200_OK)
@@ -187,35 +324,77 @@ async def analytics_summary(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
 ) -> ResponseEnvelope[AnalyticsSummaryData]:
-    """Retrieve dashboard summary analytics."""
+    """Real dashboard summary analytics computed from DB rows."""
+    cases = await asyncio.to_thread(fetch_all_cases_for_analytics, 2000)
+    transactions = await asyncio.to_thread(fetch_all_transactions_for_analytics, 2000)
+    accounts = await asyncio.to_thread(fetch_all_accounts, 500)
+    fraud_types = await asyncio.to_thread(fetch_fraud_memory_types)
+
+    def _within_range(iso_str: str) -> bool:
+        created = str(iso_str or "")[:10]
+        if date_from and created < date_from[:10]:
+            return False
+        if date_to and created > date_to[:10]:
+            return False
+        return True
+
+    cases = [c for c in cases if _within_range(str(c.get("created_at") or ""))]
+
+    total_cases = len(cases)
+    by_tier: Counter[str] = Counter(str(c.get("risk_tier") or "LOW") for c in cases)
+    by_trigger: Counter[str] = Counter(
+        str(c.get("trigger_type") or "UNKNOWN") for c in cases
+    )
+    by_fraud: Counter[str] = Counter(
+        str(f.get("fraud_type") or "other") for f in fraud_types
+    )
+
+    accounts_frozen = sum(
+        1 for a in accounts if str(a.get("status") or "").lower() == "frozen"
+    )
+
+    protected_amount = sum(
+        float(t.get("amount_myr") or 0.0)
+        for t in transactions
+        if str(t.get("status") or "")
+        in ("frozen", "cooling_off_expired", "rejected")
+        or str(t.get("risk_tier") or "") == "HIGH"
+    )
+
+    scores = [
+        int(c.get("risk_score") or 0)
+        for c in cases
+        if c.get("risk_score") is not None
+    ]
+    avg_risk = round(sum(scores) / len(scores), 1) if scores else 0.0
+
+    worker_counts: Counter[str] = Counter()
+    for c in cases:
+        xr = c.get("xai_report")
+        if isinstance(xr, dict):
+            for w in xr.get("workers_activated") or []:
+                worker_counts[str(w)] += 1
+
     return make_envelope(
         AnalyticsSummaryData(
-            period={"from": date_from or "2026-07-01", "to": date_to or "2026-07-26"},
-            total_cases=142,
-            by_risk_tier={"LOW": 89, "MEDIUM": 35, "HIGH": 18},
+            period={"from": date_from or "", "to": date_to or ""},
+            total_cases=total_cases,
+            by_risk_tier={
+                "LOW": by_tier.get("LOW", 0),
+                "MEDIUM": by_tier.get("MEDIUM", 0),
+                "HIGH": by_tier.get("HIGH", 0),
+            },
             by_trigger_type={
-                "TRANSACTION": 67,
-                "CALL": 42,
-                "PHISHING": 28,
-                "REPORT": 5,
+                "TRANSACTION": by_trigger.get("TRANSACTION", 0),
+                "CALL": by_trigger.get("CALL", 0),
+                "PHISHING": by_trigger.get("PHISHING", 0),
+                "TELEMETRY": by_trigger.get("TELEMETRY", 0),
             },
-            by_fraud_type={
-                "MACAU_SCAM": 31,
-                "INVESTMENT_SCAM": 24,
-                "IMPERSONATION_SCAM": 19,
-                "PHISHING": 28,
-                "OTHER": 40,
-            },
-            accounts_frozen=12,
-            total_amount_protected_myr=287500.0,
-            avg_risk_score=52.3,
-            worker_activation_counts={
-                "financial": 67,
-                "telemetry": 72,
-                "research": 142,
-                "phone": 42,
-                "phishing": 28,
-            },
+            by_fraud_type=dict(by_fraud),
+            accounts_frozen=accounts_frozen,
+            total_amount_protected_myr=round(protected_amount, 2),
+            avg_risk_score=avg_risk,
+            worker_activation_counts=dict(worker_counts),
         )
     )
 
@@ -230,11 +409,27 @@ async def analytics_trend(
     date_to: str | None = Query(None),
     group_by: str | None = Query("day"),
 ) -> ResponseEnvelope[AnalyticsTrendData]:
-    """Retrieve case trend chart series."""
+    """Real case trend series aggregated by day from fraud_cases rows."""
+    cases = await asyncio.to_thread(fetch_all_cases_for_analytics, 2000)
+
+    per_day: dict[str, Counter[str]] = {}
+    for c in cases:
+        created = str(c.get("created_at") or "")[:10]
+        if date_from and created < date_from[:10]:
+            continue
+        if date_to and created > date_to[:10]:
+            continue
+        per_day.setdefault(created, Counter())[str(c.get("risk_tier") or "LOW")] += 1
+
     series = [
-        AnalyticsTrendPoint(date="2026-07-20", total=4, HIGH=1, MEDIUM=2, LOW=1),
-        AnalyticsTrendPoint(date="2026-07-21", total=7, HIGH=3, MEDIUM=2, LOW=2),
-        AnalyticsTrendPoint(date="2026-07-22", total=3, HIGH=0, MEDIUM=1, LOW=2),
+        AnalyticsTrendPoint(
+            date=day,
+            total=sum(counts.values()),
+            HIGH=counts.get("HIGH", 0),
+            MEDIUM=counts.get("MEDIUM", 0),
+            LOW=counts.get("LOW", 0),
+        )
+        for day, counts in sorted(per_day.items())[-30:]
     ]
     return make_envelope(AnalyticsTrendData(series=series))
 
@@ -245,27 +440,39 @@ async def analytics_trend(
     status_code=status.HTTP_200_OK,
 )
 async def list_alerts(
-    status: str | None = Query("pending"),
+    status_filter: str | None = Query("pending", alias="status"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> ResponseEnvelope[AdminAlertListResponseData]:
-    """List unreviewed/reviewed admin alerts."""
-    now = datetime.now(UTC).isoformat()
-    mock_alerts = [
-        AdminAlertItem(
-            alert_id=f"alert-{uuid.uuid4().hex[:8]}",
-            case_id="case-101",
-            alert_type="HIGH_RISK_FREEZE",
-            status="pending",
-            risk_score=82,
-            verdict_summary="Multiple fraud indicators detected.",
-            created_at=now,
+    """List real admin alerts (pending by default)."""
+    offset = (page - 1) * page_size
+    alerts = await asyncio.to_thread(
+        list_admin_alerts, status_filter or "pending", page_size, offset
+    )
+    items: list[AdminAlertItem] = []
+    for alert in alerts:
+        details = alert.get("details")
+        if isinstance(details, dict):
+            risk_score = int(details.get("risk_score") or 0)
+            verdict = str(details.get("verdict_summary") or "")
+        else:
+            risk_score = 0
+            verdict = ""
+        items.append(
+            AdminAlertItem(
+                alert_id=str(alert.get("id") or ""),
+                case_id=str(alert.get("case_id") or ""),
+                alert_type=str(alert.get("alert_type") or ""),
+                status=str(alert.get("status") or "pending"),
+                risk_score=risk_score,
+                verdict_summary=verdict or "Alert generated by TranSafe.",
+                created_at=str(alert.get("created_at") or ""),
+            )
         )
-    ]
     return make_envelope(
         AdminAlertListResponseData(
-            items=mock_alerts,
-            total=len(mock_alerts),
+            items=items,
+            total=len(items),
             page=page,
             page_size=page_size,
             has_next=False,
@@ -282,12 +489,14 @@ async def update_alert(
     alert_id: str,
     payload: AdminAlertUpdateRequest,
 ) -> ResponseEnvelope[AdminAlertUpdateData]:
-    """Mark an admin alert as reviewed."""
-    now = datetime.now(UTC).isoformat()
+    """Mark an admin alert as reviewed in the DB."""
+    await asyncio.to_thread(
+        update_admin_alert, alert_id, payload.status, payload.admin_note
+    )
     return make_envelope(
         AdminAlertUpdateData(
             alert_id=alert_id,
             status=payload.status,
-            reviewed_at=now,
+            reviewed_at=datetime.now(UTC).isoformat(),
         )
     )

@@ -496,3 +496,57 @@ pytest tests/unit/test_api.py -v
 
 ### 9.3 Historical Baseline Isolation (`src/db/supabase.py`)
 Filters out `current_tx_id` and `'pending'` / `'frozen_pending'` status transactions from historical 90-day baseline aggregations to prevent current pending transactions from polluting user history or masking first-time recipients.
+
+---
+
+## 10. Detailed Prompting Design & Skill Integration
+
+TranSafe’s AI reasoning capabilities rely on highly structured LLM prompting. Rather than relying on monolithic conversational prompts, TranSafe agents use a strict **System + Human + Skill Context** paradigm. 
+
+### 10.1 Dynamic Skill Integration Architecture
+To decouple behavioral logic from application code, TranSafe uses **Skills**—external markdown files (located in `backend/skills/`) that define how an agent should behave, reason, or converse. 
+
+* **Why Skills?** By externalizing instructions (e.g., `phone_dialogue_guide.md`), risk operators and policy teams can update an agent's guardrails without requiring a backend developer to touch Python code or redeploy the server.
+* **How it works (`src/agents/prompts.py`)**: At runtime, utility functions (`load_skill_file()`) parse these markdown files. When an agent is activated, it dynamically injects the contents of the relevant skill files directly into its **System Prompt** context window.
+
+### 10.2 Agent-Specific Prompting Design
+
+#### A. Phone Agent (Auto-Talk Mode)
+The Phone Agent conducts live verification dialogues with unknown callers. It relies heavily on integrated skills.
+* **Skill Injections**:
+    1. `phone_dialogue_guide.md`: Dictates the persona ("You are TranSafe Voice Assistant"), safety guardrails ("Never confirm user account numbers"), and conversation states (Greeting -> Verification -> Resolution).
+    2. `anchor_questions.md`: A JSON/Markdown list of structured verification questions (e.g., "Ask for their employee ID").
+* **Prompt Structure**:
+    * **System**: `[Role Definition] + [Injected Dialogue Guide] + [Injected Anchor Questions] + [Format: Strict JSON]`
+    * **Human**: `[Transcribed Caller Speech] + [Conversation History Array]`
+* **Workflow**: The LLM evaluates the caller's speech against the anchor questions. If the caller fails the verification, the LLM generates a response rejecting the request. 
+
+#### B. Financial Agent
+The Financial Agent does not converse; it performs mathematical and behavioral anomaly detection.
+* **Prompt Structure**:
+    * **System**: Defines the exact anomaly vectors to evaluate (e.g., "Look for amounts > 5x the 90-day average, evaluate unusual hours, flag round numbers").
+    * **Human**: Injects structured JSON contexts:
+        1. `Pending Transaction Data`
+        2. `Historical 90-Day Baseline` (avg, max, known recipients)
+        3. `Associated Case Context` (entities from recent phishing/call triggers)
+* **Workflow**: The LLM acts as an auditor, comparing the pending JSON against the baseline JSON. It is strictly prompted to output a `score` (0-100) and an `evidence` array summarizing the deviations.
+
+#### C. Research Agent (RAG Prompting)
+The Research Agent processes external and internal intelligence.
+* **Prompt Structure**:
+    * **System**: "You are an intelligence agent. Cross-reference the query entities against the provided RAG matches and Web Search results."
+    * **Human**: Injects:
+        1. `Extracted Entities` (Phones, URLs, Accounts)
+        2. `Internal pgvector Matches` (Historical fraud cases from DB)
+        3. `Tavily Web Search Matches` (Public scam reports)
+* **Workflow**: The prompt forces the LLM to synthesize the disparate sources, explicitly penalizing low-similarity internal matches and prioritizing high-confidence web hits from regulatory domains.
+
+### 10.3 Output Determinism & JSON Enforcement
+Because the agents operate in a graph state machine, their outputs must be perfectly structured for the next node to parse.
+* **JSON Instructions**: Every System Prompt ends with a strict schema requirement (e.g., `Return your findings in strict JSON format: {"score": 88, "confidence": 0.9, "evidence": ["..."]}`).
+* **JSON Parsing Fallback**: Even when Groq's `response_format={"type": "json_object"}` is used, smaller fallback models (like `llama-3.1-8b-instant`) may still prepend conversational text (e.g., "Here is the JSON..."). The backend utilizes a custom `extract_json_object()` utility in `src/agents/llm.py` to regex-strip markdown fences and conversational preambles, ensuring 100% parse success rates.
+
+### 10.4 Explainable AI (XAI) Synthesis Prompting
+The XAI Agent is the final LLM step. Its prompt design is unique because it acts as an **aggregator**.
+* **Input Context**: It receives the raw `evidence` arrays from *all* activated workers, plus the final aggregated `risk_tier` (LOW/MEDIUM/HIGH) calculated by the deterministic Risk Scorer.
+* **Prompt Objective**: The LLM is instructed to synthesize the technical evidence into a user-friendly, 1-2 sentence `verdict_summary` in plain English, and a translated `verdict_summary_ms` in Bahasa Melayu, while providing actionable, tier-appropriate `recommendation` advice.

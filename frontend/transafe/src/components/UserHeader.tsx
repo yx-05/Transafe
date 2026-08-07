@@ -1,5 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useApi } from '../context/ApiContext';
+import { SettingsModal } from './SettingsModal';
 
 interface UserHeaderProps {
   title?: string;
@@ -8,10 +10,12 @@ interface UserHeaderProps {
 
 export const UserHeader: React.FC<UserHeaderProps> = ({ title = 'TranSafe', showBack = false }) => {
   const navigate = useNavigate();
+  const { config, setConfig } = useApi();
   const bellBtnRef = useRef<HTMLButtonElement>(null);
   const helpBtnRef = useRef<HTMLButtonElement>(null);
   const [showNotificationToast, setShowNotificationToast] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [notifRightOffset, setNotifRightOffset] = useState<number | null>(null);
   const [helpRightOffset, setHelpRightOffset] = useState<number | null>(null);
 
@@ -77,6 +81,23 @@ export const UserHeader: React.FC<UserHeaderProps> = ({ title = 'TranSafe', show
 
       {/* Header Action Buttons */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', paddingRight: '4px', flexShrink: 0 }}>
+        {/* Settings Gear */}
+        <button
+          onClick={() => {
+            setShowNotificationToast(false);
+            setShowHelpModal(false);
+            setShowSettings(true);
+          }}
+          style={{ color: '#ffffff', padding: '10px', borderRadius: '9999px', border: 'none', background: 'none', cursor: 'pointer', transition: 'background-color 0.15s' }}
+          title="Backend API Settings"
+          onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)')}
+          onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: '28px', fontVariationSettings: "'FILL' 0" }}>
+            settings
+          </span>
+        </button>
+
         {/* Notification Bell */}
         <button
           ref={bellBtnRef}
@@ -202,6 +223,14 @@ export const UserHeader: React.FC<UserHeaderProps> = ({ title = 'TranSafe', show
           </button>
         </div>
       )}
+
+      {/* Backend Settings Modal */}
+      <SettingsModal
+        open={showSettings}
+        config={config}
+        onSave={(newConfig) => setConfig(newConfig)}
+        onClose={() => setShowSettings(false)}
+      />
     </header>
   );
 };
