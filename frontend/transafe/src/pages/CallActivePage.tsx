@@ -62,6 +62,7 @@ export const CallActivePage: React.FC = () => {
     call_session_id: string;
     caller_number: string;
     caller_name: string;
+    call_mode?: string;
   } | null>(null);
 
   const [statusLog, setStatusLog] = useState<string[]>([
@@ -98,7 +99,7 @@ export const CallActivePage: React.FC = () => {
           const number = (call.caller_number as string) || '+60161234567';
           const name = (call.caller_name as string) || 'Inspector Tan (PDRM Fake)';
 
-          setIncomingCall({ call_session_id: callId, caller_number: number, caller_name: name });
+          setIncomingCall({ call_session_id: callId, caller_number: number, caller_name: name, call_mode: call.call_mode as string | undefined });
           setStatusLog((prev) => [
             ...prev,
             `[CALL ENGINE] 📞 Incoming call detected from ${name} (${number})`,
@@ -313,6 +314,16 @@ export const CallActivePage: React.FC = () => {
     await handleTakeover(callSessionId);
   };
 
+  // The AI already auto-engaged (AUTO_TALK). The user chose "Listen & Monitor"
+  // which means THEY want to talk — accept the call and hand the line back
+  // to LISTEN so no further AI agent replies are spawned.
+  const handleAcceptThenHandoff = async () => {
+    if (!incomingCall) return;
+    const callSessionId = incomingCall.call_session_id;
+    await handleAcceptCall();
+    await handleHandoff(callSessionId);
+  };
+
   const handleTakeover = async (sessionIdOverride?: string) => {
     const targetSessionId = sessionIdOverride || activeCallSessionId;
     if (!targetSessionId) return;
@@ -324,6 +335,21 @@ export const CallActivePage: React.FC = () => {
       setStatusLog((prev) => [...prev, `[AGENT TAKEOVER] AI Agent active: ${res.message}`]);
     } catch (err: any) {
       setStatusLog((prev) => [...prev, `Takeover failed: ${err.message}`]);
+    }
+  };
+
+  // Hand the line BACK to the user: AUTO_TALK -> LISTEN (user talk mode).
+  const handleHandoff = async (sessionIdOverride?: string) => {
+    const targetSessionId = sessionIdOverride || activeCallSessionId;
+    if (!targetSessionId) return;
+    try {
+      setStatusLog((prev) => [...prev, '[USER HANDOFF] Pausing AI agent — switching back to your voice (LISTEN)...']);
+      const res = await client.handoffCall(targetSessionId);
+      setCurrentMode('copilot');
+      setCallMode('copilot');
+      setStatusLog((prev) => [...prev, `[USER HANDOFF] You are back on the line: ${res.message}`]);
+    } catch (err: any) {
+      setStatusLog((prev) => [...prev, `Handoff failed: ${err.message}`]);
     }
   };
 
@@ -433,13 +459,25 @@ export const CallActivePage: React.FC = () => {
 
               <div style={{ padding: '12px', backgroundColor: 'rgba(127, 29, 29, 0.6)', border: '1px solid rgba(153, 27, 27, 0.6)', borderRadius: '12px', color: '#fca5a5', fontSize: '12px', marginBottom: '32px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span className="material-symbols-outlined" style={{ color: '#f87171' }}>warning</span>
-                <span>TranSafe AI is monitoring this incoming call session. Caller ID may be spoofed.</span>
+                <span>
+                  {incomingCall.call_mode === 'AUTO_TALK'
+                    ? 'TranSafe AI already auto-answered and is speaking to the caller. Choose "Listen & Monitor" to take back the line, or "Let AI Answer" to keep the agent talking.'
+                    : 'TranSafe AI is monitoring this incoming call session. Caller ID may be spoofed.'}
+                </span>
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div style={{ display: 'flex', gap: '12px' }}>
                   <button
-                    onClick={handleAcceptCall}
+                    onClick={() => {
+                      // If the AI already auto-engaged in AUTO_TALK mode, the
+                      // user explicitly wants to talk — hand the line back to LISTEN.
+                      if (incomingCall?.call_mode === 'AUTO_TALK') {
+                        handleAcceptThenHandoff();
+                      } else {
+                        handleAcceptCall();
+                      }
+                    }}
                     className="btn-primary"
                     style={{ flex: 1, padding: '14px', fontSize: '14px', justifyContent: 'center', backgroundColor: '#059669', boxShadow: 'none' }}
                     onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#047857'; }}
@@ -510,9 +548,19 @@ export const CallActivePage: React.FC = () => {
                       Switch to Auto-Talk
                     </button>
                   ) : (
-                    <span className="dark-badge-pass" style={{ padding: '8px 12px', fontSize: '12px', alignSelf: 'center' }}>
-                      AI Agent Speaking
-                    </span>
+                    <>
+                      <span className="dark-badge-pass" style={{ padding: '8px 12px', fontSize: '12px', alignSelf: 'center' }}>
+                        AI Agent Speaking
+                      </span>
+                      <button
+                        onClick={() => handleHandoff()}
+                        className="btn-secondary"
+                        style={{ padding: '8px 12px', fontSize: '12px', backgroundColor: 'rgba(5, 150, 105, 0.3)', color: '#6ee7b7', border: '1px solid #059669' }}
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>mic</span>
+                        Take Over Line
+                      </button>
+                    </>
                   )}
 
                   <button onClick={handleEndCall} className="btn-danger" style={{ padding: '8px 16px', fontSize: '12px' }}>

@@ -1,5 +1,12 @@
 # 🛡️ TranSafe
 
+**AI CAN DO IT Tencent Cloud X UTM Hackathon**  
+**Team**: SleepWell  
+**Video Pitch**: [Watch on YouTube](https://youtu.be/bDpos5liC_E)  
+**Live Demo**: [https://transafe123.netlify.app/](https://transafe123.netlify.app/)  
+
+---
+
 TranSafe is a next-generation, AI-powered fraud protection platform designed for retail banking. Built on a **Multi-Agent System (MAS)** using LangGraph, TranSafe goes beyond static rule-based fraud engines by autonomously analyzing financial transactions, passive behavioral telemetry, live phone calls, and phishing material to protect users in real-time.
 
 ## ✨ Key Features
@@ -18,6 +25,12 @@ TranSafe's core is an event-driven directed state machine built with **LangGraph
 2. **Orchestration**: The Orchestrator agent dynamically delegates the context to the relevant parallel Worker Agents.
 3. **Execution**: Agents independently gather data from Supabase, evaluate using the Groq API (Llama 3 70B/8B), and append their findings to a shared `GraphState`.
 4. **Enforcement**: A Risk Scorer aggregates the weighted findings, determining a final tier (LOW, MEDIUM, HIGH) which triggers the Action Dispatcher to approve, challenge, or freeze the activity.
+
+## 🧰 Agents' Skills
+
+To maintain behavioral guardrails without requiring constant code redeployments, TranSafe utilizes dynamically loaded **Skills**. These are external markdown files (e.g., `phone_dialogue_guide.md`, `anchor_questions.md`) stored in the `backend/skills/` directory.
+
+When an agent is activated, it reads these skill files and dynamically injects them into its System Prompt context window. This architecture allows risk operators and policy teams to rapidly update an agent's reasoning bounds, safety guardrails, and conversation protocols purely via markdown edits.
 
 ## 🛠️ Technology Stack
 
@@ -42,5 +55,8 @@ For deep dives into the system design, agent flows, and database schemas, explor
 - [08_detailed_design.md](doc/08_detailed_design.md)
 
 ---
-chat log with CodeBuddy.ai:
-doc/history_202607261708.md
+
+## 💬 Chat Logs
+
+**chat log with CodeBuddy.ai**:
+[doc/history_202607261708.md](doc/history_202607261708.md)

@@ -142,6 +142,13 @@ export class TranSafeApiClient {
     });
   }
 
+  async handoffCall(sessionId: string): Promise<CallTakeoverData> {
+    return fetchEnvelope<CallTakeoverData>(`${this.config.baseUrl}/api/v1/call/${sessionId}/handoff`, {
+      method: 'POST',
+      headers: this.headers,
+    });
+  }
+
   async fetchTtsAudio(callSessionId: string, ttsId: string): Promise<Blob> {
     const url =
       `${this.config.baseUrl}/api/v1/call/${encodeURIComponent(callSessionId)}/tts/${encodeURIComponent(ttsId)}`;
