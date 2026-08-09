@@ -489,6 +489,80 @@ async def call_takeover(session_id: str) -> ResponseEnvelope[CallTakeoverData]:
     )
 
 
+@router.post(
+    "/call/{session_id}/handoff",
+    response_model=ResponseEnvelope[CallTakeoverData],
+    status_code=status.HTTP_200_OK,
+)
+async def call_handoff(session_id: str) -> ResponseEnvelope[CallTakeoverData]:
+    """Switch an AUTO_TALK call back to user (LISTEN / copilot) mode mid-call.
+
+    This is the reverse of ``/takeover`` — after the AI agent has been talking
+    to the scammer, the customer can reclaim the line. Once LISTEN, the phone
+    worker only highlights utterances; no AUTO_TALK agent replies are spawned.
+    """
+    call = session_store.get_call(session_id)
+    if not call:
+        matching_call = None
+        for c_id, c_data in session_store.call_sessions.items():
+            if c_data.get("session_id") == session_id or c_id == session_id:
+                matching_call = c_data
+                break
+        if not matching_call:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "NOT_FOUND",
+                    "message": (
+                        f"No active call session found for session_id"
+                        f" '{session_id}'"
+                    ),
+                },
+            )
+        call = matching_call
+
+    call_session_id = str(call["call_session_id"])
+    if call.get("status") == "ENDED":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "CALL_ENDED",
+                "message": "Call session has ended — handoff not possible.",
+            },
+        )
+    if call.get("call_mode") != "AUTO_TALK":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "NOT_AUTO_TALK",
+                "message": "Session is not in AUTO_TALK mode.",
+            },
+        )
+
+    session_store.set_call_mode(call_session_id, "LISTEN")
+
+    # Broadcast the mode change so both the customer and scammer UIs update live
+    try:
+        await broadcast_event(call_session_id, {
+            "type": "mode_change",
+            "call_session_id": call_session_id,
+            "call_mode": "LISTEN",
+            "source": "user_handoff",
+            "timestamp": datetime.now(UTC).isoformat(),
+        })
+    except Exception as err:  # noqa: BLE001
+        logger.warning(f"Failed to broadcast mode_change for {call_session_id}: {err}")
+
+    return make_envelope(
+        CallTakeoverData(
+            session_id=call_session_id,
+            call_mode="LISTEN",
+            message="TranSafe agent paused — you are back on the line.",
+            ws_events_url=f"/ws/call/{call_session_id}/events",
+        )
+    )
+
+
 @router.get(
     "/cases/recent",
     response_model=ResponseEnvelope[RecentCasesData],
