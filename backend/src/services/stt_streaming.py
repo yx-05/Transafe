@@ -29,7 +29,7 @@ def _build_query(model: str, language: str) -> str:
         "interim_results": "true",
         "container": "webm",
         "encoding": "opus",
-        "endpointing": "300",
+        "endpointing": "500",
     }
     return "&".join(f"{k}={v}" for k, v in params.items())
 

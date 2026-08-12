@@ -353,7 +353,21 @@ export const CallActivePage: React.FC = () => {
     }
   };
 
-  const handleEndCall = () => {
+  const handleEndCall = async () => {
+    const sessionId = activeCallSessionId;
+
+    // Notify the backend so it broadcasts `call_ended` to BOTH the scammer and
+    // customer event sockets. Without this the scammer side stays stuck in the
+    // call forever (only the user's local sockets were being closed before).
+    if (sessionId) {
+      try {
+        await client.declineCall(sessionId);
+        setStatusLog((prev) => [...prev, `[CALL ENGINE] Call ${sessionId} ended — backend notified, broadcasting to scammer.`]);
+      } catch (err: any) {
+        setStatusLog((prev) => [...prev, `[CALL ENGINE] End-call notify failed (closing locally): ${err.message}`]);
+      }
+    }
+
     audioStreamerRef.current.stopStreaming();
     eventsWsClientRef.current.close();
     setStreaming(false);
