@@ -49,6 +49,18 @@ call_autotalk_busy: set[str] = set()
 # spaced out or the agent talks over its own previous utterance.
 AUTO_TALK_REPLY_MIN_GAP = 6.0
 
+# Utterance coalescing: the VAD/STT emits multiple "final" fragments for a
+# single spoken turn because of natural mid-sentence pauses. We buffer
+# same-speaker fragments and emit ONE merged utterance after a short quiet
+# window, so a long sentence becomes one chat bubble and the AUTO_TALK agent
+# answers the COMPLETE message rather than each broken piece. Hard caps below
+# force a flush even while the speaker keeps talking in short bursts.
+UTTERANCE_COALESCE_WINDOW = 1.0          # seconds of silence after last fragment
+UTTERANCE_COALESCE_MAX_FRAGMENTS = 5     # flush if a turn grows this fragmented
+UTTERANCE_COALESCE_MAX_SPAN = 5.0        # flush if a turn has run this long
+# cid -> speaker_tag -> {fragments: [str], first_ts: float, flush_task: Task|None}
+call_utterance_coalesce: dict[str, dict[str, dict[str, Any]]] = {}
+
 
 async def broadcast_event(call_session_id: str, event_data: dict[str, Any]) -> None:
     """Helper to broadcast JSON event payloads to all connected event WebSockets for a session."""
@@ -94,6 +106,12 @@ async def _finalize_ended_call(call_session_id: str) -> None:
     """Run the call-end deep analysis, persist the call as a fraud case, then tear down state."""
     deep_event: dict[str, Any] | None = None
     try:
+        # Flush any fragments still sitting in the coalesce window so the final
+        # deep analysis sees the speaker's complete last message.
+        try:
+            await _flush_all_coalesced(call_session_id)
+        except Exception as err:  # noqa: BLE001
+            print(f"[COALESCE FLUSH ❌] {call_session_id} call-end: {err}")
         deep_event = await _run_deep_transcript_analysis(call_session_id, "call_end")
     except Exception as err:  # noqa: BLE001
         print(f"[DEEP ANALYSIS ❌] {call_session_id} call-end: {err}")
@@ -114,6 +132,12 @@ async def _finalize_ended_call(call_session_id: str) -> None:
     call_phone_states.pop(call_session_id, None)
     call_pending_broadcasts.pop(call_session_id, None)
     call_autotalk_busy.discard(call_session_id)
+    # Cancel + drop any leftover coalesce entries (fragments already flushed above)
+    pending_coalesce = call_utterance_coalesce.pop(call_session_id, {})
+    for entry in pending_coalesce.values():
+        task = entry.get("flush_task")
+        if task and not task.done():
+            task.cancel()
     session_store.clear_tts_audio(call_session_id)
 
     # Close any active Deepgram streaming sessions for this call
@@ -514,6 +538,89 @@ def _build_highlight_spans(text: str, highlight_events: list[dict[str, Any]]) ->
     return spans
 
 
+async def _flush_coalesced_utterance(call_session_id: str, speaker_tag: str) -> None:
+    """Merge and broadcast all buffered fragments for (call, speaker) as ONE turn."""
+    entry = call_utterance_coalesce.get(call_session_id, {}).pop(speaker_tag, None)
+    if not entry:
+        return
+    frags = entry.get("fragments") or []
+    merged = " ".join(f.strip() for f in frags if f and f.strip()).strip()
+    if merged:
+        await broadcast_text_and_highlights(call_session_id, speaker_tag, merged)
+
+
+async def _coalesce_waiter(call_session_id: str, speaker_tag: str, entry: dict[str, Any]) -> None:
+    """Wait out the quiet window, then flush the merged utterance if still current."""
+    try:
+        await asyncio.sleep(UTTERANCE_COALESCE_WINDOW)
+        current = call_utterance_coalesce.get(call_session_id, {}).get(speaker_tag)
+        if current is entry:
+            await _flush_coalesced_utterance(call_session_id, speaker_tag)
+    except asyncio.CancelledError:
+        pass
+
+
+async def _schedule_coalesced_flush(call_session_id: str, speaker_tag: str, entry: dict[str, Any]) -> None:
+    """(Re)start the quiet window for the current coalescing entry."""
+    prev = entry.get("flush_task")
+    if prev and not prev.done():
+        prev.cancel()
+    entry["flush_task"] = asyncio.create_task(
+        _coalesce_waiter(call_session_id, speaker_tag, entry)
+    )
+
+
+async def queue_utterance_for_broadcast(call_session_id: str, speaker_tag: str, text: str) -> None:
+    """Coalesce final STT fragments from the same speaker into one spoken turn.
+
+    Call this from real-time STT paths (Groq buffered / Deepgram streaming)
+    instead of ``broadcast_text_and_highlights``. Natural mid-sentence pauses
+    make the VAD emit several "final" fragments; buffering them for a short
+    window means the UI shows ONE bubble and the AUTO_TALK agent replies to the
+    complete message. Explicit/manual transcripts should still call
+    ``broadcast_text_and_highlights`` directly.
+    """
+    if not text or len(text) < 2:
+        return
+
+    now = time.time()
+    by_speaker = call_utterance_coalesce.setdefault(call_session_id, {})
+    entry = by_speaker.get(speaker_tag)
+    if entry is None:
+        entry = {"fragments": [], "first_ts": now, "flush_task": None}
+        by_speaker[speaker_tag] = entry
+
+    entry["fragments"].append(text)
+
+    # Hard caps: the speaker is still going in short bursts — flush now rather
+    # than buffering forever. Otherwise (re)start the quiet window so the next
+    # fragment continues merging into the same bubble.
+    if (
+        len(entry["fragments"]) >= UTTERANCE_COALESCE_MAX_FRAGMENTS
+        or (now - entry["first_ts"]) >= UTTERANCE_COALESCE_MAX_SPAN
+    ):
+        await _flush_coalesced_utterance(call_session_id, speaker_tag)
+        return
+
+    await _schedule_coalesced_flush(call_session_id, speaker_tag, entry)
+
+
+async def _flush_all_coalesced(call_session_id: str) -> None:
+    """Force-emit any pending coalesced fragments (used when the call ends)."""
+    by_speaker = call_utterance_coalesce.pop(call_session_id, {})
+    for speaker_tag, entry in by_speaker.items():
+        task = entry.get("flush_task")
+        if task and not task.done():
+            task.cancel()
+        frags = entry.get("fragments") or []
+        merged = " ".join(f.strip() for f in frags if f and f.strip()).strip()
+        if merged:
+            # After call end the wrapper preserves the text in the phone state
+            # transcript instead of broadcasting — exactly what the final deep
+            # analysis needs so no last fragment is lost.
+            await broadcast_text_and_highlights(call_session_id, speaker_tag, merged)
+
+
 async def broadcast_text_and_highlights(call_session_id: str, speaker_tag: str, text: str) -> None:
     """Run each new utterance through the Phone Worker agent and broadcast results.
 
@@ -690,7 +797,8 @@ async def _broadcast_text_and_highlights_impl(call_session_id: str, speaker_tag:
 
         async def _autotalk_reply_guard() -> None:
             try:
-                await asyncio.sleep(1.0)
+                # Short natural turn delay before the agent starts replying.
+                await asyncio.sleep(0.4)
                 # Pace replies: wait out any remaining gap since the agent's
                 # last spoken reply so the TTS audio never overlaps. Fragments
                 # that arrive during the wait are folded into the transcript,
@@ -725,7 +833,9 @@ async def _process_deepgram_stream(
                 continue
             is_final = bool(msg.get("is_final"))
             if is_final:
-                await broadcast_text_and_highlights(call_session_id, speaker_tag, text)
+                # Coalesce same-speaker fragments into one spoken turn so long
+                # sentences with natural pauses become one bubble / one AI reply.
+                await queue_utterance_for_broadcast(call_session_id, speaker_tag, text)
             else:
                 await broadcast_event(call_session_id, {
                     "type": "transcript_interim",
@@ -790,12 +900,14 @@ async def ws_call_audio_stream(
             try:
                 message = await asyncio.wait_for(websocket.receive(), timeout=0.2)
             except asyncio.TimeoutError:
-                # Silence flushing check: if buffer >= 14000 bytes (~1.7s) and speaker paused for > 0.8s, flush STT!
+                # Silence flushing check: Trigger STT if speaker paused for > 0.6s
+                # and we have audio. Lower silence threshold = speech appears faster;
+                # the coalesce window re-merges fragments split by short pauses.
                 buf = call_audio_buffers[call_session_id].get(role, bytearray())
                 last_ts = call_last_audio_time[call_session_id].get(role, now_ts)
                 is_busy = call_stt_active_locks[call_session_id].get(role, False)
 
-                if len(buf) >= 14000 and (now_ts - last_ts) >= 0.8 and not is_busy:
+                if len(buf) >= 4000 and (now_ts - last_ts) >= 0.6 and not is_busy:
                     call_stt_active_locks[call_session_id][role] = True
                     raw_chunk = bytes(buf)
                     buf.clear()
@@ -841,15 +953,15 @@ async def ws_call_audio_stream(
                 buf = call_audio_buffers[call_session_id][role]
                 buf.extend(audio_bytes)
 
-                # Cap buffer size to max 30,000 bytes to prevent latency bursts
-                if len(buf) > 30000:
+                # Cap buffer size to max 120,000 bytes (prevent forceful chop of long sentences)
+                if len(buf) > 120000:
                     hdr = call_webm_headers[call_session_id].get(role, b"")
-                    call_audio_buffers[call_session_id][role] = bytearray(buf[-20000:])
+                    call_audio_buffers[call_session_id][role] = bytearray(buf[-100000:])
                     buf = call_audio_buffers[call_session_id][role]
 
-                # Max buffer flush: if buffer reaches 24,000 bytes (~3.0s), trigger STT immediately
+                # Max buffer flush: if buffer reaches 90,000 bytes (~10.0s), trigger STT as absolute limit
                 is_busy = call_stt_active_locks[call_session_id].get(role, False)
-                if len(buf) >= 24000 and not is_busy:
+                if len(buf) >= 90000 and not is_busy:
                     call_stt_active_locks[call_session_id][role] = True
                     raw_chunk = bytes(buf)
                     buf.clear()
@@ -930,7 +1042,9 @@ async def process_stt_transcription(call_session_id: str, speaker_role: str, aud
             return
 
         speaker_tag = "SCAMMER" if speaker_role == "SCAMMER" else "CUSTOMER"
-        await broadcast_text_and_highlights(call_session_id, speaker_tag, text)
+        # Coalesce same-speaker fragments into one spoken turn so long
+        # sentences with natural pauses become one bubble / one AI reply.
+        await queue_utterance_for_broadcast(call_session_id, speaker_tag, text)
     finally:
         # Always release lock for role
         if call_session_id in call_stt_active_locks:

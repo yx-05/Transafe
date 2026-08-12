@@ -425,9 +425,13 @@ def phone_worker_node(
 
     if call_mode == "AUTO_TALK":
         finding = _analyze_autotalk_mode(transcript, caller_number, pre_check)
-        # Surface rules-based coercion phrase highlights for the scammer's
-        # utterances even in Auto-Talk Mode, so the UI can still mark them.
-        highlights, rule_score_inc, rule_evidence = _scan_high_risk_phrases(transcript)
+        
+        # Surface both rules-based AND LLM-based coercion phrase highlights 
+        # for the scammer's utterances even in Auto-Talk Mode, so the UI can mark them.
+        _, highlights = _run_listen_mode(transcript, caller_number, pre_check, llm_enrich=llm_enrich)
+        
+        # Merge the rules-based score increment into the AutoTalk finding
+        _, rule_score_inc, rule_evidence = _scan_high_risk_phrases(transcript)
         if rule_score_inc:
             boosted = finding.score + rule_score_inc
             finding = WorkerFinding(
@@ -436,6 +440,7 @@ def phone_worker_node(
                 confidence=finding.confidence,
                 evidence=list(finding.evidence) + rule_evidence,
             )
+            
         return {
             "phone_finding": finding.model_dump(),
             "phone_session": {

@@ -13,11 +13,19 @@ logger = logging.getLogger(__name__)
 # Fallback voice for edge-tts (Microsoft neural) — matches the AUTO_TALK voice
 DEFAULT_EDGE_VOICE = "ms-MY-YasminNeural"
 
+# Ensure .env is loaded BEFORE reading the voice env vars below. main.py calls
+# load_dotenv() after importing this module, so without this the voice IDs would
+# silently fall back to defaults (and the paid voice would never be used).
+load_dotenv()
+
 # ElevenLabs defaults; overridable via env vars.
-# NOTE: the reference snippet used voice "O8ykjWKd0RjX6e5EyDuE" (a library voice),
-# which free-tier ElevenLabs accounts CANNOT use via the API (HTTP 402). Premade
-# voice "Daniel" (onwK4e9ZLuTAKqWW03F9) is verified working on the free plan.
+# - ELEVENLABS_VOICE_ID: premade "Daniel" (onwK4e9ZLuTAKqWW03F9) — verified working
+#   on the free plan. Used as the FALLBACK voice.
+# - ELEVENLABS_VOICE_ID_PAID: a library/paid voice (e.g. O8ykjWKd0RjX6e5EyDuE).
+#   Synthesis tries this FIRST; if the active key cannot access it (HTTP 402
+#   paid_plan_required / 401 / 403 / 404) it falls back to the free voice.
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "onwK4e9ZLuTAKqWW03F9")
+ELEVENLABS_VOICE_ID_PAID = os.getenv("ELEVENLABS_VOICE_ID_PAID", ELEVENLABS_VOICE_ID)
 ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
 ELEVENLABS_OUTPUT_FORMAT = os.getenv("ELEVENLABS_OUTPUT_FORMAT", "mp3_44100_128")
 
@@ -83,19 +91,43 @@ async def synthesize_text_to_audio_elevenlabs(
     if not keys:
         raise RuntimeError("No ELEVENLAB_API_KEY environment variable found.")
 
+    # Explicit voice override wins; otherwise try the PAID voice first and fall
+    # back to the free/premade voice when the active key cannot access it.
+    if voice_id:
+        voice_candidates = [voice_id]
+    else:
+        voice_candidates = list(
+            dict.fromkeys([ELEVENLABS_VOICE_ID_PAID, ELEVENLABS_VOICE_ID])
+        )
+
     last_error: Exception | None = None
     for idx, api_key in enumerate(keys):
         try:
             client = ElevenLabs(api_key=api_key)
-            audio_stream = client.text_to_speech.convert(
-                text=text,
-                voice_id=voice_id or ELEVENLABS_VOICE_ID,
-                model_id=model_id or ELEVENLABS_MODEL_ID,
-                output_format=output_format or ELEVENLABS_OUTPUT_FORMAT,
-            )
-            # convert() returns an iterator of bytes; join in a thread to avoid
-            # blocking the event loop during the HTTP stream.
-            audio_bytes = await asyncio.to_thread(lambda: b"".join(audio_stream))
+            audio_bytes: bytes | None = None
+            for candidate in voice_candidates:
+                try:
+                    audio_stream = client.text_to_speech.convert(
+                        text=text,
+                        voice_id=candidate,
+                        model_id=model_id or ELEVENLABS_MODEL_ID,
+                        output_format=output_format or ELEVENLABS_OUTPUT_FORMAT,
+                    )
+                    # convert() returns an iterator of bytes; join in a thread
+                    # to avoid blocking the event loop during the HTTP stream.
+                    candidate_bytes = await asyncio.to_thread(
+                        lambda: b"".join(audio_stream)
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    logger.warning(
+                        "ElevenLabs TTS voice '%s' failed with key #%d: %s",
+                        candidate, idx + 1, exc,
+                    )
+                    continue
+                if candidate_bytes:
+                    audio_bytes = candidate_bytes
+                    break
             if audio_bytes:
                 logger.info(
                     "ElevenLabs TTS ok with key #%d (%d bytes)",

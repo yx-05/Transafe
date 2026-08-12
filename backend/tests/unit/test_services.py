@@ -10,6 +10,7 @@ from src.services.tts import (
     get_elevenlabs_api_keys,
     synthesize_agent_speech,
     synthesize_text_to_audio,
+    synthesize_text_to_audio_elevenlabs,
 )
 from src.services.vision import analyze_image, extract_text_from_image
 
@@ -267,6 +268,70 @@ async def test_synthesize_agent_speech_empty_skips_elevenlabs(
     audio_bytes = await synthesize_agent_speech("")
     assert audio_bytes == b""
     mock_elevenlabs.assert_not_called()
+
+
+# -------------------------------------------------------------------
+# ElevenLabs paid-voice-first / free-voice fallback tests
+# -------------------------------------------------------------------
+@pytest.mark.asyncio
+@patch("src.services.tts.get_elevenlabs_api_keys", return_value=["sk_paid_key"])
+@patch("src.services.tts.ELEVENLABS_VOICE_ID", "free-voice")
+@patch("src.services.tts.ELEVENLABS_VOICE_ID_PAID", "paid-voice")
+async def test_elevenlabs_paid_voice_tried_first_then_falls_back_free(
+    mock_keys: MagicMock,
+) -> None:
+    """Paid voice is attempted first; free voice is used when the key can't access it."""
+    with patch("elevenlabs.client.ElevenLabs") as mock_el:
+        mock_client = mock_el.return_value
+        convert = mock_client.text_to_speech.convert
+
+        def fake_convert(**kwargs):
+            if kwargs["voice_id"] == "paid-voice":
+                raise Exception("HTTP 402: paid_plan_required")
+            return iter([b"free_audio"])
+
+        convert.side_effect = fake_convert
+
+        audio = await synthesize_text_to_audio_elevenlabs("hello there")
+
+    assert audio == b"free_audio"
+    voices = [c.kwargs["voice_id"] for c in convert.call_args_list]
+    assert voices == ["paid-voice", "free-voice"]
+
+
+@pytest.mark.asyncio
+@patch("src.services.tts.get_elevenlabs_api_keys", return_value=["sk_paid_key"])
+@patch("src.services.tts.ELEVENLABS_VOICE_ID_PAID", "paid-voice")
+async def test_elevenlabs_uses_paid_voice_when_accessible(
+    mock_keys: MagicMock,
+) -> None:
+    """When the paid voice works, it is used and no fallback is attempted."""
+    with patch("elevenlabs.client.ElevenLabs") as mock_el:
+        convert = mock_el.return_value.text_to_speech.convert
+        convert.return_value = iter([b"paid_audio"])
+
+        audio = await synthesize_text_to_audio_elevenlabs("hello")
+
+    assert audio == b"paid_audio"
+    assert convert.call_count == 1
+    assert convert.call_args.kwargs["voice_id"] == "paid-voice"
+
+
+@pytest.mark.asyncio
+@patch("src.services.tts.get_elevenlabs_api_keys", return_value=["sk_paid_key"])
+async def test_elevenlabs_explicit_voice_id_skips_paid_fallback(
+    mock_keys: MagicMock,
+) -> None:
+    """An explicit voice_id is honored directly (no paid/free candidate logic)."""
+    with patch("elevenlabs.client.ElevenLabs") as mock_el:
+        convert = mock_el.return_value.text_to_speech.convert
+        convert.return_value = iter([b"custom_audio"])
+
+        audio = await synthesize_text_to_audio_elevenlabs("hi", voice_id="custom-voice")
+
+    assert audio == b"custom_audio"
+    voices = [c.kwargs["voice_id"] for c in convert.call_args_list]
+    assert voices == ["custom-voice"]
 
 
 # -------------------------------------------------------------------
