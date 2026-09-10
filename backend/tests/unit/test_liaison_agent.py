@@ -11,9 +11,13 @@ import json
 from unittest.mock import MagicMock, patch
 
 from src.enterprise.liaison_agent import (
+    _MENU_HIDDEN,
     MAX_ITERATIONS,
+    _normalise_args,
     _plan_retrieval,
+    _resolve_placeholder,
     _synthesise,
+    _tool_menu,
     ask_transafe,
 )
 
@@ -392,3 +396,125 @@ async def test_entitled_role_does_reach_synthesis_with_the_data():
     blob = json.dumps(seen[0])
     assert "Tan Ah Kow" in blob
     assert "SCAM-027" in blob
+
+
+# ── Planner menu ─────────────────────────────────────────────────────────────
+
+
+def test_tool_menu_names_every_argument():
+    """The planner must be told the argument names, not just the tool names.
+
+    A menu of bare tool names is what produced ``get_campaign(id=...)`` and
+    ``get_case_evidence(campaign_id=...)``. Both raise
+    ``TypeError: unexpected keyword argument``, which the retrieval loop caught
+    and recorded as a failed iteration — so the failure was silent and the
+    answer was synthesised from whatever else happened to succeed.
+    """
+    menu = _tool_menu()
+    assert "get_campaign(campaign_id: string)" in menu
+    assert "get_case_evidence(case_id: string)" in menu
+
+
+def test_tool_menu_omits_tools_the_caller_cannot_use():
+    """Never advertise a call the caller is not bound to make."""
+    menu = _tool_menu({"list_active_campaigns": lambda **kw: None})
+    assert "list_active_campaigns" in menu
+    assert "get_campaign" not in menu
+
+
+def test_tool_menu_never_offers_the_agent_itself():
+    """``ask_transafe`` must not be plannable, or the loop can recurse."""
+    assert "ask_transafe" not in _tool_menu()
+
+
+def test_tool_menu_hides_parameters_that_only_look_useful():
+    """``status`` is real, but must not be offered to the planner.
+
+    It demands an exact stored enum value, so an LLM naturally answers
+    ``status="active"``, which no campaign holds. The filter returned an empty
+    list, ``query_stats`` still reported 3 campaigns, and the agent — correctly
+    — refused to answer rather than report a contradiction. Hiding the
+    parameter from the planner is the fix; it stays in the schema for direct
+    MCP callers.
+    """
+    assert "status" in _MENU_HIDDEN["list_active_campaigns"]
+    assert "status" not in _tool_menu()
+
+
+# ── Argument repair ──────────────────────────────────────────────────────────
+
+
+def test_normalise_args_renames_a_near_miss_argument():
+    """``id`` means ``campaign_id`` for get_campaign."""
+    args, notes = _normalise_args("get_campaign", {"id": "SCAM-027"})
+    assert args == {"campaign_id": "SCAM-027"}
+    assert any("renamed" in note for note in notes)
+
+
+def test_normalise_args_scopes_the_rename_to_the_tool():
+    """The same wrong name resolves differently per tool.
+
+    ``campaign_id`` supplied to get_case_evidence must become ``case_id`` — a
+    global alias table would have sent it to ``campaign_id``, which that tool
+    does not accept either.
+    """
+    args, _ = _normalise_args("get_case_evidence", {"campaign_id": "abc"})
+    assert args == {"case_id": "abc"}
+
+
+def test_normalise_args_drops_what_the_tool_cannot_accept():
+    """An unknown argument on a no-argument tool is dropped, not forwarded.
+
+    Forwarding it raised TypeError inside the tool. Dropping it with a note
+    means the call succeeds and the trace says what was discarded.
+    """
+    args, notes = _normalise_args("query_stats", {"bogus": 1})
+    assert args == {}
+    assert any("dropped" in note for note in notes)
+
+
+def test_normalise_args_coerces_declared_types():
+    """A version planned as a JSON string is still an int for the tool."""
+    args, _ = _normalise_args("get_artifact", {"name": "patch", "version": "2"})
+    assert args["version"] == 2
+
+
+def test_normalise_args_passes_an_unknown_tool_through_untouched():
+    """Silence beats invention when we have no schema for a tool."""
+    args, notes = _normalise_args("not_a_real_tool", {"whatever": 1})
+    assert args == {"whatever": 1}
+    assert notes == []
+
+
+# ── Placeholder resolution ───────────────────────────────────────────────────
+
+
+def test_resolve_placeholder_replaces_a_made_up_id():
+    """A plan made before retrieval cannot know a real id.
+
+    The model wrote the literal string ``top_campaign_from_list`` into the
+    argument; the tool answered "Campaign not found" and the agent reported a
+    miss. The real id was already in the data it had just fetched.
+    """
+    gathered = [{"tool": "list_active_campaigns", "result": {"campaigns": [{"code": "SCAM-027"}]}}]
+    assert _resolve_placeholder("top_campaign_from_list", "campaign_id", gathered) == "SCAM-027"
+
+
+def test_resolve_placeholder_leaves_real_ids_alone():
+    """Any real id carries a digit; placeholders never do."""
+    gathered = [{"tool": "t", "result": {"campaigns": [{"code": "SCAM-027"}]}}]
+    assert _resolve_placeholder("SCAM-019", "campaign_id", gathered) == "SCAM-019"
+
+
+def test_resolve_placeholder_ignores_non_id_parameters():
+    """Free-text arguments must never be rewritten.
+
+    A phone number or a question is not an id, and "contains no digit" would
+    happily match a word like "hello".
+    """
+    gathered = [{"tool": "t", "result": {"campaigns": [{"code": "SCAM-027"}]}}]
+    assert _resolve_placeholder("hello", "question", gathered) == "hello"
+
+
+def test_resolve_placeholder_with_no_data_is_a_no_op():
+    assert _resolve_placeholder("top_campaign", "campaign_id", []) == "top_campaign"

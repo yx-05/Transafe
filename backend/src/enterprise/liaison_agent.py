@@ -65,6 +65,10 @@ Rules:
 4. Cite ONLY records that appear in the gathered data. Never invent an id.
 5. If you cannot answer, say so honestly — do not fabricate.
 6. Return ONLY a JSON object.
+7. **Use the exact argument names given in the tool list below.** Do not
+   invent argument names, and do not pass a placeholder such as
+   "top_campaign_from_list" as an id — you cannot know a real id before
+   retrieving it, so either omit that tool or let the system resolve it.
 
 Schema for planning:
 {"intent": "summary of what the question is asking",
@@ -76,10 +80,278 @@ Schema for synthesis:
  "confidence": "high|medium|low"}
 """
 
+#: Fallback menu, used only when the canonical tool definitions cannot be
+#: imported. The real menu is generated from ``mcp.server.TOOL_DEFINITIONS`` so
+#: the two can never drift apart.
 TOOL_MENU = (
     "list_active_campaigns, get_campaign, get_case_evidence, get_artifact, "
     "check_indicator, query_stats"
 )
+
+#: Argument names a planner reaches for when it does not know the real one.
+#: Resolution is scoped to a single tool's declared properties, because the
+#: correct target differs per tool — ``id`` means ``campaign_id`` for
+#: ``get_campaign`` but ``case_id`` for ``get_case_evidence``.
+_ARG_SYNONYMS: tuple[str, ...] = (
+    "campaign_id",
+    "case_id",
+    "artifact_name",
+    "name",
+    "id",
+    "code",
+    "indicator_type",
+    "value",
+    "question",
+    "query",
+    "version",
+)
+
+#: Parameters that carry a record id, and are therefore the only ones where a
+#: placeholder may be replaced with a real id seen earlier in the loop.
+_ID_PARAMS: frozenset[str] = frozenset({"campaign_id", "case_id", "artifact_id"})
+
+_MENU_CACHE: dict[str, str] = {}
+
+
+#: Parameters that are real but must not be advertised to the planner.
+#:
+#: ``list_active_campaigns.status`` demands an exact stored enum value. An LLM
+#: asked to narrow the list naturally answers ``status="active"`` — a value no
+#: campaign holds — and PostgREST compares exactly, so the call returns nothing
+#: and the agent reports that the tool contradicted ``query_stats``. The tool's
+#: name already means "the active set", so the parameter is never needed here.
+#: It stays in the schema for direct MCP callers.
+_MENU_HIDDEN: dict[str, frozenset[str]] = {
+    "list_active_campaigns": frozenset({"status"}),
+}
+
+
+def _menu_entries() -> dict[str, str]:
+    """Render ``tool name -> one-line signature`` for every tool we declare.
+
+    Returns:
+        Mapping of tool name to ``name(args)`` line. Empty when the canonical
+        definitions cannot be imported, so callers fall back to
+        :data:`TOOL_MENU`.
+    """
+    if _MENU_CACHE:
+        return _MENU_CACHE
+    try:
+        from mcp.server import TOOL_DEFINITIONS
+    except Exception:  # pragma: no cover - import bootstrap only
+        logger.warning("Liaison Agent: tool definitions unavailable; using the static menu")
+        return {}
+
+    for definition in TOOL_DEFINITIONS:
+        name = str(definition.get("name") or "")
+        if not name or name == "ask_transafe":
+            # Excluded on purpose: the agent must not plan a call to itself.
+            continue
+        schema = definition.get("inputSchema") or {}
+        props = schema.get("properties") or {}
+        hidden = _MENU_HIDDEN.get(name, frozenset())
+        props = {key: spec for key, spec in props.items() if key not in hidden}
+        required = set(schema.get("required") or []) - hidden
+        params = ", ".join(
+            f"{key}: {spec.get('type', 'string')}{'' if key in required else ' (optional)'}"
+            for key, spec in props.items()
+        )
+        _MENU_CACHE[name] = (
+            f"- {name}({params})" if params else f"- {name}() — takes no arguments"
+        )
+    return _MENU_CACHE
+
+
+def _tool_menu(available_tools: dict[str, Any] | None = None) -> str:
+    """Render the planner's tool menu with real argument signatures.
+
+    The menu used to be a bare list of tool names, which told the planner what
+    it *could* call but not how. The model then invented argument names —
+    ``get_campaign(id=...)``, ``get_case_evidence(campaign_id=...)`` — and every
+    such call died on ``TypeError: unexpected keyword argument``, inside a
+    ``try/except`` that recorded it as a failed iteration and moved on. The
+    observable symptom was an ``ask_transafe`` answer quietly synthesised from
+    almost no data.
+
+    Built from :data:`mcp.server.TOOL_DEFINITIONS` rather than a hand-written
+    copy, so a signature change cannot make the prompt lie.
+
+    Args:
+        available_tools: Tools this caller is actually bound to. When given, the
+            menu is filtered to them, so a role is never invited to plan a call
+            it cannot make (``query_mcp_log`` is declared but not exposed to the
+            agent at all).
+
+    Returns:
+        Multi-line menu of ``name(arg: type)`` entries. Falls back to
+        :data:`TOOL_MENU` if the definitions cannot be imported.
+    """
+    entries = _menu_entries()
+    if not entries:
+        return TOOL_MENU
+    if available_tools is not None:
+        lines = [line for name, line in entries.items() if name in available_tools]
+        return "\n".join(lines) if lines else TOOL_MENU
+    return "\n".join(entries.values())
+
+
+def _tool_schema(tool_name: str) -> dict[str, Any] | None:
+    """Return the JSON schema for one tool.
+
+    Args:
+        tool_name: Canonical tool name.
+
+    Returns:
+        The tool's ``inputSchema``, or ``None`` when the tool is not declared.
+        ``None`` and ``{}`` are deliberately distinct: the first means "we know
+        nothing about this tool, pass the arguments through", the second means
+        "this tool takes no arguments, so any argument is wrong".
+    """
+    try:
+        from mcp.server import TOOL_DEFINITIONS
+    except Exception:  # pragma: no cover - import bootstrap only
+        return None
+    for definition in TOOL_DEFINITIONS:
+        if str(definition.get("name")) == tool_name:
+            return definition.get("inputSchema") or {}
+    return None
+
+
+def _coerce(value: Any, spec: dict[str, Any]) -> Any:
+    """Coerce one argument to the type its schema declares.
+
+    The planner emits JSON, so a version arrives as ``"2"`` where the tool
+    annotates ``int``. Left alone that raises inside the tool, which the loop
+    would record as a failed iteration; converting here keeps a correct plan
+    from failing over its own formatting.
+    """
+    kind = spec.get("type")
+    if kind == "integer" and not isinstance(value, int):
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            return value
+    if kind == "string" and not isinstance(value, str):
+        return str(value)
+    return value
+
+
+def _normalise_args(
+    tool_name: str,
+    args: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Clean a planner's arguments up against the tool's real signature.
+
+    Two failure modes are repairable rather than fatal:
+
+    * **Wrong name, right value** — ``campaign_id`` supplied to a tool whose
+      parameter is ``case_id``. Renamed when exactly one declared parameter is
+      a plausible target, so a near-miss plan still retrieves something.
+    * **Unknown name, nowhere to put it** — dropped, with a note in the trace.
+      A ``TypeError`` tells the operator nothing; a note says which argument was
+      discarded.
+
+    Args:
+        tool_name: Canonical tool name.
+        args: Arguments as planned by the model.
+
+    Returns:
+        ``(clean_args, notes)``. ``notes`` is empty when nothing had to change.
+    """
+    schema = _tool_schema(tool_name)
+    if schema is None:
+        # Not a tool we declare — leave the arguments alone so the failure is
+        # whatever the tool itself reports, not something invented here.
+        return dict(args), []
+
+    props: dict[str, Any] = schema.get("properties") or {}
+    if not props:
+        # A tool that takes no arguments. Anything supplied is a planning
+        # mistake, and passing it through raises TypeError inside the tool.
+        notes = [f"dropped unexpected argument {key!r}" for key in args]
+        return {}, notes
+
+    clean: dict[str, Any] = {}
+    notes: list[str] = []
+
+    for key, value in args.items():
+        if key in props:
+            clean[key] = _coerce(value, props[key])
+            continue
+
+        target = next(
+            (
+                synonym
+                for synonym in _ARG_SYNONYMS
+                if synonym in props and synonym not in clean
+            ),
+            None,
+        )
+        if target is None:
+            notes.append(f"dropped unknown argument {key!r}")
+            continue
+        clean[target] = _coerce(value, props[target])
+        notes.append(f"renamed argument {key!r} -> {target!r}")
+
+    missing = [key for key in (schema.get("required") or []) if key not in clean]
+    for key in missing:
+        notes.append(f"missing required argument {key!r}")
+
+    return clean, notes
+
+
+def _resolve_placeholder(value: Any, param: str, gathered_data: list[dict[str, Any]]) -> Any:
+    """Replace a made-up record id with a real one already retrieved.
+
+    The planner runs *before* any retrieval, so it cannot know a real campaign
+    id. Asked to be specific, it writes a placeholder — literally
+    ``"top_campaign_from_list"`` — and the tool answers "Campaign not found".
+    The data to fix that is already in ``gathered_data``.
+
+    Deliberately narrow: only id parameters, and only values that contain no
+    digit at all. A real id always carries one (``SCAM-027``, a UUID), whereas
+    every placeholder we have seen is pure prose, so this cannot rewrite a
+    legitimate value.
+
+    Args:
+        value: The planned argument value.
+        param: Parameter name it was supplied for.
+        gathered_data: Results retrieved so far, already redacted.
+
+    Returns:
+        A real id when one was found, otherwise ``value`` unchanged.
+    """
+    if param not in _ID_PARAMS or not isinstance(value, str):
+        return value
+    if any(char.isdigit() for char in value):
+        return value
+
+    for item in gathered_data:
+        result = item.get("result")
+        rows: list[Any] = []
+        if isinstance(result, list):
+            rows = result
+        elif isinstance(result, dict):
+            for key in ("campaigns", "cases", "artifacts", "results", "items"):
+                if isinstance(result.get(key), list):
+                    rows = result[key]
+                    break
+            else:
+                rows = [result]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            for id_key in (param, "id", "campaign_id", "case_id", "code"):
+                candidate = row.get(id_key)
+                if isinstance(candidate, str) and any(c.isdigit() for c in candidate):
+                    logger.info(
+                        "Liaison Agent: resolved placeholder %r -> %r for %s",
+                        value,
+                        candidate,
+                        param,
+                    )
+                    return candidate
+    return value
 
 
 async def ask_transafe(
@@ -111,7 +383,7 @@ async def ask_transafe(
     trace: list[dict[str, Any]] = []
 
     # ── Step 1: classify intent and plan retrieval ───────────────────────────
-    plan = _plan_retrieval(question, role)
+    plan = _plan_retrieval(question, role, available_tools)
     trace.append({"step": "plan", "plan": plan})
 
     if plan is None:
@@ -131,6 +403,16 @@ async def ask_transafe(
             trace.append({"step": f"iteration_{i}", "tool": tool_name, "status": "not_found"})
             continue
 
+        # Repair the plan before it reaches the tool: rename near-miss argument
+        # names, drop ones the tool cannot accept, and swap a made-up id for a
+        # real one seen earlier. Each of these used to surface as a TypeError
+        # swallowed into the trace, leaving the answer built on nothing.
+        tool_args, arg_notes = _normalise_args(str(tool_name), dict(tool_args))
+        tool_args = {
+            key: _resolve_placeholder(value, key, gathered_data)
+            for key, value in tool_args.items()
+        }
+
         try:
             raw_result = available_tools[tool_name](**tool_args)
             if inspect.isawaitable(raw_result):
@@ -140,9 +422,17 @@ async def ask_transafe(
             # can never carry an unentitled field.
             redacted = redact_by_role(raw_result, role)
             gathered_data.append({"tool": tool_name, "result": redacted})
-            trace.append(
-                {"step": f"iteration_{i}", "tool": tool_name, "args": tool_args, "status": "ok"}
-            )
+            entry = {
+                "step": f"iteration_{i}",
+                "tool": tool_name,
+                "args": tool_args,
+                "status": "ok",
+            }
+            if arg_notes:
+                # Visible in the trace so a repaired plan is not mistaken for a
+                # clean one when reading an audit row later.
+                entry["arg_warnings"] = arg_notes
+            trace.append(entry)
         except Exception as exc:
             logger.exception("Liaison Agent: tool %s failed", tool_name)
             trace.append(
@@ -161,13 +451,19 @@ async def ask_transafe(
     return synthesis
 
 
-def _plan_retrieval(question: str, role: str) -> dict[str, Any] | None:
+def _plan_retrieval(
+    question: str,
+    role: str,
+    available_tools: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Classify intent and plan retrieval via the LLM.
 
     Args:
         question: Natural-language question.
         role: Caller role, included so the planner does not plan a retrieval
             whose entire result would be redacted away.
+        available_tools: Tools this caller is bound to, so the advertised menu
+            contains no call the caller could not actually make.
 
     Returns:
         ``{"intent": ..., "retrieval_plan": [...]}``, or ``None`` when the LLM
@@ -179,7 +475,7 @@ def _plan_retrieval(question: str, role: str) -> dict[str, Any] | None:
         HumanMessage(
             content=(
                 f"Role: {role}\nQuestion: {question}\n\n"
-                f"Plan your retrieval. Available tools: {TOOL_MENU}"
+                f"Plan your retrieval. Available tools:\n{_tool_menu(available_tools)}"
             )
         ),
     ]

@@ -69,6 +69,57 @@ def test_tool_list_active_campaigns_redacts(mock_client):
 
 
 @patch("mcp.server.get_supabase_client")
+def test_tool_list_active_campaigns_status_filter_is_case_insensitive(mock_client):
+    """`approved` must find the campaigns stored as `APPROVED`.
+
+    PostgREST compares status exactly, so without normalising, a caller writing
+    "Approved" got an empty list and no indication why.
+    """
+    mock_table = MagicMock()
+    mock_client.return_value.table.return_value = mock_table
+    mock_table.select.return_value.eq.return_value.execute.return_value.data = [
+        {"id": "c1", "code": "SCAM-027", "user_id": "u1"}
+    ]
+
+    result = tool_list_active_campaigns("compliance", status="Approved")
+
+    mock_table.select.return_value.eq.assert_called_once_with("status", "APPROVED")
+    assert result["campaigns"][0]["code"] == "SCAM-027"
+
+
+@patch("mcp.server.get_supabase_client")
+def test_tool_list_active_campaigns_explains_an_empty_filtered_result(mock_client):
+    """An empty list must say why it is empty.
+
+    A filter that matches nothing is indistinguishable from a broken tool to
+    whoever asked, and `status="active"` is the natural mistake: no campaign
+    holds that value.
+    """
+    mock_table = MagicMock()
+    mock_client.return_value.table.return_value = mock_table
+    mock_table.select.return_value.eq.return_value.execute.return_value.data = []
+
+    result = tool_list_active_campaigns("compliance", status="active")
+
+    assert result["campaigns"] == []
+    assert "APPROVED" in result["note"]
+
+
+@patch("mcp.server.get_supabase_client")
+def test_tool_list_active_campaigns_defaults_to_the_whole_active_set(mock_client):
+    """No filter means both statuses, not a single one."""
+    mock_table = MagicMock()
+    mock_client.return_value.table.return_value = mock_table
+    mock_table.select.return_value.in_.return_value.execute.return_value.data = []
+
+    tool_list_active_campaigns("compliance")
+
+    mock_table.select.return_value.in_.assert_called_once_with(
+        "status", ["APPROVED", "ACTIVE"]
+    )
+
+
+@patch("mcp.server.get_supabase_client")
 def test_tool_check_indicator_known(mock_client):
     """NOTE: 04_mcp_gateway.md's version of this test calls the tool with two
     positional arguments against a three-argument signature and cannot run as

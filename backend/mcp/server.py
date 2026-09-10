@@ -69,6 +69,10 @@ DEFAULT_ROLE = "public"
 #: ``TRANSAFE_CALLER`` explicitly; this is the fallback for a direct run.
 DEFAULT_CALLER = "workbuddy"
 
+#: The statuses a campaign can hold and still be worth listing. Declared here
+#: rather than inline so the filter and the error message cannot disagree.
+KNOWN_CAMPAIGN_STATUSES: tuple[str, ...] = ("APPROVED", "ACTIVE")
+
 #: Rate limiting — sliding one-minute window, per caller.
 RATE_LIMIT_PER_MINUTE = 60
 RATE_LIMIT_WINDOW_SECONDS = 60.0
@@ -301,19 +305,35 @@ def tool_list_active_campaigns(role: str, status: str | None = None) -> dict[str
 
     Args:
         role: Caller role.
-        status: Optional exact status filter. When omitted, ``APPROVED`` and
-            ``ACTIVE`` campaigns are returned.
+        status: Optional status filter. Matched case-insensitively against
+            :data:`KNOWN_CAMPAIGN_STATUSES`. When omitted, every active
+            campaign is returned.
 
     Returns:
-        ``{"campaigns": [...]}``, redacted.
+        ``{"campaigns": [...]}``, redacted. When a supplied filter matches
+        nothing, the payload also carries a ``note`` naming the valid values,
+        because an unexplained empty list is indistinguishable from a broken
+        tool to whoever asked.
     """
     client = get_supabase_client()
     query = client.table("campaigns").select("*")
-    query = (
-        query.eq("status", status) if status else query.in_("status", ["APPROVED", "ACTIVE"])
-    )
+    if status:
+        # Case-insensitive on purpose: the stored values are upper-case
+        # (``APPROVED``) and callers write ``Approved``. PostgREST compares
+        # exactly, so without this the filter silently returns nothing.
+        query = query.eq("status", str(status).strip().upper())
+    else:
+        query = query.in_("status", list(KNOWN_CAMPAIGN_STATUSES))
     data = _rows(query.execute())
-    return redact_by_role({"campaigns": data}, role)
+
+    payload: dict[str, Any] = {"campaigns": data}
+    if status and not data:
+        payload["note"] = (
+            f"No campaign has status {str(status).strip().upper()!r}. "
+            f"Valid statuses: {', '.join(KNOWN_CAMPAIGN_STATUSES)}. "
+            "Omit the status argument to list the whole active set."
+        )
+    return redact_by_role(payload, role)
 
 
 def tool_get_campaign(role: str, campaign_id: str) -> dict[str, Any]:
@@ -651,7 +671,15 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "status": {"type": "string", "description": "Filter by exact status"},
+                "status": {
+                    "type": "string",
+                    "description": (
+                        "Narrow the result to one exact status. Valid values: "
+                        "APPROVED, ACTIVE. Omit to get the whole active set — "
+                        "that is what the tool already means, so only pass this "
+                        "to exclude one of the two."
+                    ),
+                },
             },
         },
     },
