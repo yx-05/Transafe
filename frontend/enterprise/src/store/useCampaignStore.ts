@@ -15,6 +15,48 @@ import type {
 } from "../types/campaign";
 import type { OverviewResponse } from "../types/api";
 
+/**
+ * Collapse a burst of refresh calls into one in-flight request plus a single
+ * trailing re-run.
+ *
+ * Screens re-fetch when a real `ns_event` lands — never on a timer — so a
+ * REPLAY run that emits ~25 events in a few seconds issues ~25 refreshes. One
+ * overview refresh costs several Supabase round-trips, and a burst that size is
+ * enough to exhaust the HTTP/2 connection pool. The API degrades to empty
+ * results rather than erroring, so the failure surfaces as **zeroed counters on
+ * screen at the exact moment an audience is watching** — which is how this was
+ * found.
+ *
+ * Coalescing keeps the event-driven contract (events still drive the refresh)
+ * while making the cost of a burst independent of its length.
+ */
+function coalesce<A extends unknown[]>(
+  fn: (...args: A) => Promise<void>,
+): (...args: A) => Promise<void> {
+  let inFlight = false;
+  let pending: A | null = null;
+
+  return async (...args: A): Promise<void> => {
+    if (inFlight) {
+      // Keep only the newest request: these are idempotent refreshes, so the
+      // last one supersedes every one it replaced.
+      pending = args;
+      return;
+    }
+    inFlight = true;
+    try {
+      await fn(...args);
+      while (pending) {
+        const next = pending;
+        pending = null;
+        await fn(...next);
+      }
+    } finally {
+      inFlight = false;
+    }
+  };
+}
+
 interface CampaignStore {
   overview: OverviewResponse | null;
   cases: CaseSummary[];
@@ -112,3 +154,17 @@ export const useCampaignStore = create<CampaignStore>((set, get) => ({
     if (get().selectedCampaign?.id === id) await get().loadCampaign(id);
   },
 }));
+
+// Refresh loaders are idempotent reads that every screen fires on every relevant
+// ns_event, so they are the ones that stampede. Wrapping them here rather than
+// at each call site means a screen added later inherits the protection instead
+// of re-introducing the burst.
+const { loadOverview, loadCases, loadCampaigns, loadArtifacts } =
+  useCampaignStore.getState();
+
+useCampaignStore.setState({
+  loadOverview: coalesce(loadOverview),
+  loadCases: coalesce(loadCases),
+  loadCampaigns: coalesce(loadCampaigns),
+  loadArtifacts: coalesce(loadArtifacts),
+});
