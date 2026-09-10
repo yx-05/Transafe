@@ -37,26 +37,39 @@ def test_subscribers_for_unknown_type() -> None:
 
 
 @pytest.mark.asyncio
-async def test_propagate_artifact_emits_events() -> None:
-    """Propagation emits two events per agent and records a receipt."""
+async def test_propagate_artifact_emits_offer_only() -> None:
+    """Propagation offers the artifact and stops there.
+
+    The receipt and the acknowledgement belong to the consuming agent: it writes
+    them when it actually reads the artifact
+    (``agents/workers/artifact_feed.py::_write_receipt``). The propagator used to
+    write both on the agent's behalf, which made ``artifact_consumption`` claim
+    consumption that had not happened.
+    """
     artifact = {
         "id": "art-1",
         "name": "SCAM-027",
         "artifact_type": "campaign_pack",
         "version": 1,
     }
-    with (
-        patch("src.enterprise.propagation.emit_event", new_callable=AsyncMock) as mock_emit,
-        patch("src.enterprise.propagation.record_consumption") as mock_record,
-    ):
+    with patch("src.enterprise.propagation.emit_event", new_callable=AsyncMock) as mock_emit:
         results = await propagate_artifact(artifact)
 
     assert len(results) == 1
     assert results[0]["agent_name"] == "phone_worker"
-    assert results[0]["status"] == "acknowledged"
-    # Two events per agent: propagation_event + propagation_acknowledged.
-    assert mock_emit.call_count == 2
-    mock_record.assert_called_once_with("art-1", "phone_worker")
+    # "offered", not "acknowledged" — nothing has confirmed consumption yet.
+    assert results[0]["status"] == "offered"
+    # One event per agent: the offer. The ack is the consumer's to emit.
+    assert mock_emit.call_count == 1
+    assert mock_emit.call_args.kwargs["event_type"] == "propagation_event"
+
+
+@pytest.mark.asyncio
+async def test_propagation_writes_no_receipt() -> None:
+    """The propagator must not touch artifact_consumption at all."""
+    import src.enterprise.propagation as propagation_module
+
+    assert not hasattr(propagation_module, "record_consumption")
 
 
 @pytest.mark.asyncio
@@ -68,16 +81,13 @@ async def test_propagate_artifact_no_subscribers() -> None:
         "artifact_type": "cs_advisory",
         "version": 1,
     }
-    with (
-        patch("src.enterprise.propagation.emit_event", new_callable=AsyncMock),
-        patch("src.enterprise.propagation.record_consumption"),
-    ):
+    with patch("src.enterprise.propagation.emit_event", new_callable=AsyncMock):
         results = await propagate_artifact(artifact)
     assert results == []
 
 
 @pytest.mark.asyncio
-async def test_propagate_artifact_survives_receipt_failure() -> None:
+async def test_propagate_artifact_survives_notify_failure() -> None:
     """A failed notification degrades that agent only, and never raises."""
     artifact = {
         "id": "art-3",
@@ -85,12 +95,10 @@ async def test_propagate_artifact_survives_receipt_failure() -> None:
         "artifact_type": "campaign_pack",
         "version": 2,
     }
-    with (
-        patch("src.enterprise.propagation.emit_event", new_callable=AsyncMock),
-        patch(
-            "src.enterprise.propagation.record_consumption",
-            side_effect=RuntimeError("table missing"),
-        ),
+    with patch(
+        "src.enterprise.propagation.emit_event",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("table missing"),
     ):
         results = await propagate_artifact(artifact)
 
@@ -235,10 +243,7 @@ async def test_propagate_phone_agent_core_reaches_phone_worker() -> None:
         "artifact_type": "phone_agent_core",
         "version": 7,
     }
-    with (
-        patch("src.enterprise.propagation.emit_event", new_callable=AsyncMock),
-        patch("src.enterprise.propagation.record_consumption"),
-    ):
+    with patch("src.enterprise.propagation.emit_event", new_callable=AsyncMock):
         results = await propagate_artifact(artifact)
     assert len(results) == 1
     assert results[0]["agent_name"] == "phone_worker"

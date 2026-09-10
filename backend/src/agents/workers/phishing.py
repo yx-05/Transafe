@@ -190,9 +190,47 @@ def get_phishing_playbook_data() -> dict[str, Any]:
         time.monotonic() - _PHISHING_PLAYBOOK_CACHE_TS > _LEARNED_MERGE_TTL_SECONDS
     ):
         _PHISHING_PLAYBOOK_CACHE = _merge_learned_keywords(_PHISHING_PLAYBOOK_CACHE)
+        _PHISHING_PLAYBOOK_CACHE = _merge_published_patch(_PHISHING_PLAYBOOK_CACHE)
         _PHISHING_PLAYBOOK_CACHE_TS = time.monotonic()
 
     return _PHISHING_PLAYBOOK_CACHE
+
+
+def _merge_published_patch(playbook: dict[str, Any]) -> dict[str, Any]:
+    """Union published ``phishing_playbook_patch`` keywords into the playbook.
+
+    The pack-tier counterpart of ``phone_agent_core`` for this worker: an
+    approved campaign compiles a patch, and the next analysis scans with it.
+    Reading is also what writes the consumption receipt, so the console's
+    ``consumed_by: phishing_worker`` is earned here rather than asserted by the
+    propagator on this agent's behalf.
+    """
+    merged = dict(playbook)
+    try:
+        from src.agents.workers.artifact_feed import load_phishing_patch
+
+        patch = load_phishing_patch()
+    except Exception as err:  # noqa: BLE001 - detection must not depend on it
+        logger.debug(f"published phishing patch merge skipped: {err}")
+        return merged
+
+    if not (patch.get("heavy") or patch.get("light") or patch.get("url_patterns")):
+        return merged
+
+    heavy = set(str(k).lower().strip() for k in (merged.get("heavy") or []))
+    light = set(str(k).lower().strip() for k in (merged.get("light") or []))
+    heavy |= set(patch.get("heavy") or [])
+    light |= set(patch.get("light") or [])
+    merged["heavy"] = sorted(heavy)
+    merged["light"] = sorted(light)
+    if patch.get("url_patterns"):
+        existing = {str(p).lower() for p in (merged.get("url_patterns") or [])}
+        merged["url_patterns"] = sorted(existing | {str(p).lower() for p in patch["url_patterns"]})
+    merged["_published_patch_merged"] = True
+    logger.debug(
+        f"playbook merged with published patches: heavy={len(heavy)} light={len(light)}"
+    )
+    return merged
 
 
 def _merge_learned_keywords(playbook: dict[str, Any]) -> dict[str, Any]:
@@ -411,7 +449,7 @@ def _run_research_enhancement(
         entities.get("phone_numbers") or entities.get("urls") or entities.get("bank_accounts")
     )
     has_rag = bool(rag_hits)
-    strong_rag = any(float((h.get("similarity") or 0.0)) >= 0.80 for h in rag_hits)
+    strong_rag = any(float(h.get("similarity") or 0.0) >= 0.80 for h in rag_hits)
 
     # Hard gate 1: clearly benign → no research needed
     if not has_entities and base_finding.score < 40 and not has_rag:

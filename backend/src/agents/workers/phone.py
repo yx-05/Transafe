@@ -1,7 +1,6 @@
 """Phone Worker Agent for TranSafe Multi-Agent pipeline."""
 
 import inspect
-import json
 import logging
 import os
 from typing import Any
@@ -19,8 +18,8 @@ from src.agents.prompts import (
     get_phone_dialogue_guide,
 )
 from src.agents.state import GraphState, WorkerFinding
-from src.agents.workers.artifact_feed import load_learned_phrases
-from src.db.vector_store import check_blacklist, search_fraud_memory
+from src.agents.workers.artifact_feed import load_core_guide, load_learned_phrases
+from src.db.vector_store import check_blacklist
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +59,7 @@ HIGH_RISK_PHRASES = [
     "safe account", "akaun selamat",
     "money laundering", "pengubahan wang haram",
     "face arrest", "akan ditangkap",
-    "otp", "one time password", 
+    "otp", "one time password",
     "bank negara malaysia", "pdrm", "lhdn",
     "transfer immediately", "pindah segera",
     "jabatan kastam", "your account suspended", "akaun anda digantung",
@@ -362,7 +361,12 @@ def _run_autotalk_responder(
     """
     try:
         anchor_questions = get_anchor_questions()
-        dialogue_guide = get_phone_dialogue_guide()
+        # The published core skill wins over the checked-in skill file when one
+        # exists: ``phone_agent_core`` is the campaign-agnostic tier, so an
+        # approved generalisation changes what this agent does on its next
+        # invocation. An empty string (nothing published, or the registry is
+        # unreachable) falls back to the file — the pre-artifact behaviour.
+        dialogue_guide = load_core_guide() or get_phone_dialogue_guide()
     except Exception as err:  # noqa: BLE001
         logger.warning(f"AUTO_TALK skills unavailable, using fallback reply: {err}")
         anchor_questions = []
@@ -442,11 +446,11 @@ def phone_worker_node(
 
     if call_mode == "AUTO_TALK":
         finding = _analyze_autotalk_mode(transcript, caller_number, pre_check)
-        
-        # Surface both rules-based AND LLM-based coercion phrase highlights 
+
+        # Surface both rules-based AND LLM-based coercion phrase highlights
         # for the scammer's utterances even in Auto-Talk Mode, so the UI can mark them.
         _, highlights = _run_listen_mode(transcript, caller_number, pre_check, llm_enrich=llm_enrich)
-        
+
         # Merge the rules-based score increment into the AutoTalk finding
         _, rule_score_inc, rule_evidence = _scan_high_risk_phrases(transcript)
         if rule_score_inc:
@@ -457,7 +461,7 @@ def phone_worker_node(
                 confidence=finding.confidence,
                 evidence=list(finding.evidence) + rule_evidence,
             )
-            
+
         return {
             "phone_finding": finding.model_dump(),
             "phone_session": {

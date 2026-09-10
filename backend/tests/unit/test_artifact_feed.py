@@ -17,9 +17,13 @@ from unittest.mock import patch
 import pytest
 
 from src.agents.workers.artifact_feed import (
+    blocked_recipient_accounts,
     extract_pack_phrases,
+    load_core_guide,
     load_learned_phrases,
-    reset_learned_phrase_cache,
+    load_phishing_patch,
+    load_txn_rules,
+    reset_artifact_cache,
 )
 from src.agents.workers.phone import HIGH_RISK_PHRASES, _scan_high_risk_phrases
 
@@ -54,10 +58,10 @@ def _pack(
 
 @pytest.fixture(autouse=True)
 def _clear_cache() -> Any:
-    """The phrase cache is process-global; leaking it across tests hides bugs."""
-    reset_learned_phrase_cache()
+    """Every artifact cache is process-global; leaking one across tests hides bugs."""
+    reset_artifact_cache()
     yield
-    reset_learned_phrase_cache()
+    reset_artifact_cache()
 
 
 # ── extraction ───────────────────────────────────────────────────────────────
@@ -163,7 +167,9 @@ def test_novel_phrase_only_in_artifact_is_detected() -> None:
     Before worker-side consumption existed this could not pass: the phrase
     appears in no shipped rule, so a hit is only possible by reading the pack.
     """
-    transcript = [{"utterance_id": "u1", "speaker": "CALLER", "text": f"Sila berikan {NOVEL_PHRASE}"}]
+    transcript = [
+        {"utterance_id": "u1", "speaker": "CALLER", "text": f"Sila berikan {NOVEL_PHRASE}"}
+    ]
     with (
         patch("src.enterprise.registry.list_artifacts", return_value=[_pack()]),
         patch("src.enterprise.registry.record_consumption"),
@@ -183,3 +189,307 @@ def test_builtin_rules_still_fire_without_any_artifact() -> None:
 
     assert score > 0
     assert all("learned from campaign" not in e for e in evidence)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Core tier — phone_agent_core
+# ══════════════════════════════════════════════════════════════════════════════
+CORE_BODY = (
+    "# phone_agent_core\n\n## Escalation rules\n"
+    "R-4: When an authority claim, an isolation instruction and a money-movement "
+    "instruction co-occur in one call, escalate to enhanced verification "
+    "regardless of the institution named.\n"
+)
+
+
+def _core(artifact_id: str = "art-core", version: int = 7) -> dict[str, Any]:
+    """Build a published phone_agent_core artifact row."""
+    return {
+        "id": artifact_id,
+        "name": "phone_agent_core",
+        "artifact_type": "phone_agent_core",
+        "tier": "core",
+        "version": version,
+        "content": CORE_BODY,
+        "content_json": None,
+    }
+
+
+def test_load_core_guide_returns_published_body() -> None:
+    """The published core skill is returned, and the reader earns a receipt."""
+    with (
+        patch("src.enterprise.registry.list_artifacts", return_value=[_core()]),
+        patch("src.enterprise.registry.record_consumption") as mock_receipt,
+        patch("src.enterprise.events.emit_event_sync") as mock_ack,
+    ):
+        body = load_core_guide()
+
+    assert body == CORE_BODY
+    mock_receipt.assert_called_once_with("art-core", "phone_worker", client=None)
+    # The acknowledgement is emitted by the consumer, not the propagator.
+    assert mock_ack.call_args.kwargs["event_type"] == "propagation_acknowledged"
+    assert mock_ack.call_args.kwargs["payload"]["acknowledged_by"] == "consumer"
+
+
+def test_load_core_guide_empty_when_nothing_published() -> None:
+    """No published core skill → empty string, so the caller falls back to the file."""
+    with patch("src.enterprise.registry.list_artifacts", return_value=[]):
+        assert load_core_guide() == ""
+
+
+def test_load_core_guide_ignores_pack_tier_rows() -> None:
+    """A campaign pack is not a core skill, even if its type were mislabelled."""
+    pack = _pack(artifact_id="art-pack")
+    pack["artifact_type"] = "phone_agent_core"  # right type, wrong tier
+    with patch("src.enterprise.registry.list_artifacts", return_value=[pack]):
+        assert load_core_guide() == ""
+
+
+def test_load_core_guide_survives_registry_failure() -> None:
+    """An unreachable registry degrades to the pre-artifact behaviour, never raises."""
+    with patch("src.enterprise.registry.list_artifacts", side_effect=RuntimeError("down")):
+        assert load_core_guide() == ""
+
+
+def test_phone_worker_prefers_core_skill_over_skill_file() -> None:
+    """The core skill is the prompt the phone agent actually runs."""
+    from src.agents.workers.phone import _run_autotalk_responder
+
+    captured: dict[str, Any] = {}
+
+    def _capture(transcript: Any, anchors: Any, guide: Any, suspicion: Any, aq: Any) -> str:
+        captured["guide"] = guide
+        return "prompt"
+
+    class _LLM:
+        def invoke(self, _messages: Any) -> Any:
+            return type("R", (), {"content": '{"reply": "ok"}'})()
+
+    with (
+        patch("src.agents.workers.phone.load_core_guide", return_value=CORE_BODY),
+        patch("src.agents.workers.phone.get_phone_dialogue_guide", return_value="FILE BODY"),
+        patch("src.agents.workers.phone.get_anchor_questions", return_value=[]),
+        patch("src.agents.workers.phone.build_autotalk_response_prompt", side_effect=_capture),
+    ):
+        _run_autotalk_responder([], "+60123", {}, 0, {})
+
+    assert captured["guide"] == CORE_BODY
+
+
+def test_phone_worker_falls_back_to_skill_file_when_no_core() -> None:
+    """An empty core body means the checked-in guide still drives the agent."""
+    from src.agents.workers.phone import _run_autotalk_responder
+
+    captured: dict[str, Any] = {}
+
+    def _capture(transcript: Any, anchors: Any, guide: Any, suspicion: Any, aq: Any) -> str:
+        captured["guide"] = guide
+        return "prompt"
+
+    with (
+        patch("src.agents.workers.phone.load_core_guide", return_value=""),
+        patch("src.agents.workers.phone.get_phone_dialogue_guide", return_value="FILE BODY"),
+        patch("src.agents.workers.phone.get_anchor_questions", return_value=[]),
+        patch("src.agents.workers.phone.build_autotalk_response_prompt", side_effect=_capture),
+    ):
+        _run_autotalk_responder([], "+60123", {}, 0, {})
+
+    assert captured["guide"] == "FILE BODY"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Pack tier — phishing_playbook_patch
+# ══════════════════════════════════════════════════════════════════════════════
+PHISHING_NOVEL = "suruhanjaya sekuriti malaysia"
+
+
+def _patch_artifact(artifact_id: str = "art-patch", code: str = "SCAM-042") -> dict[str, Any]:
+    """Build a published phishing_playbook_patch artifact row."""
+    return {
+        "id": artifact_id,
+        "name": f"{code}_phishing_playbook_patch",
+        "artifact_type": "phishing_playbook_patch",
+        "tier": "pack",
+        "version": 1,
+        "content_json": {
+            "campaign": code,
+            "heavy_keywords": [PHISHING_NOVEL],
+            "light_keywords": ["semak akaun"],
+            "url_patterns": ["sc-verify.online*"],
+        },
+    }
+
+
+def test_load_phishing_patch_merges_and_receipts() -> None:
+    """Published patches are unioned, and each read earns a receipt."""
+    with (
+        patch("src.enterprise.registry.list_artifacts", return_value=[_patch_artifact()]),
+        patch("src.enterprise.registry.record_consumption") as mock_receipt,
+        patch("src.enterprise.events.emit_event_sync"),
+    ):
+        patch_data = load_phishing_patch()
+
+    assert PHISHING_NOVEL in patch_data["heavy"]
+    assert "semak akaun" in patch_data["light"]
+    assert "sc-verify.online*" in patch_data["url_patterns"]
+    mock_receipt.assert_called_once_with("art-patch", "phishing_worker", client=None)
+
+
+def test_load_phishing_patch_empty_when_nothing_published() -> None:
+    """No published patch → empty lists, never an exception."""
+    with patch("src.enterprise.registry.list_artifacts", return_value=[]):
+        patch_data = load_phishing_patch()
+    assert patch_data == {"heavy": [], "light": [], "url_patterns": []}
+
+
+def test_phishing_playbook_merges_published_patch() -> None:
+    """An approved patch reaches the keyword lists the rule engine scans with."""
+    import src.agents.workers.phishing as phishing
+
+    phishing._PHISHING_PLAYBOOK_CACHE = None
+    phishing._PHISHING_PLAYBOOK_CACHE_TS = 0.0
+    try:
+        with patch(
+            "src.enterprise.registry.list_artifacts",
+            return_value=[_patch_artifact()],
+        ):
+            data = phishing._merge_published_patch({"heavy": ["existing"], "light": []})
+            assert PHISHING_NOVEL in data["heavy"]
+            assert "existing" in data["heavy"]
+    finally:
+        phishing._PHISHING_PLAYBOOK_CACHE = None
+        phishing._PHISHING_PLAYBOOK_CACHE_TS = 0.0
+
+
+def test_merge_published_patch_survives_registry_failure() -> None:
+    """A registry outage leaves the playbook byte-for-byte as it was."""
+    import src.agents.workers.phishing as phishing
+
+    with patch(
+        "src.agents.workers.artifact_feed.load_phishing_patch",
+        side_effect=RuntimeError("down"),
+    ):
+        data = phishing._merge_published_patch({"heavy": ["existing"], "light": ["l"]})
+
+    assert data["heavy"] == ["existing"]
+    assert data["light"] == ["l"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Pack tier — txn_rule
+# ══════════════════════════════════════════════════════════════════════════════
+MULE_ACCOUNT = "159255887741"
+
+
+def _txn_artifact(artifact_id: str = "art-txn", code: str = "SCAM-042") -> dict[str, Any]:
+    """Build a published txn_rule artifact row."""
+    return {
+        "id": artifact_id,
+        "name": f"{code}_txn_rule",
+        "artifact_type": "txn_rule",
+        "tier": "pack",
+        "version": 1,
+        "content_json": {
+            "campaign": code,
+            "rules": [
+                {
+                    "action": "BLOCK",
+                    "condition": {
+                        "field": "recipient_account",
+                        "op": "in",
+                        "values": [MULE_ACCOUNT],
+                    },
+                    "reason": f"Known mule account in {code}",
+                },
+                {
+                    "action": "STEP_UP",
+                    "condition": {"field": "amount", "op": "gt", "values": [10000]},
+                    "reason": "High-value transfer",
+                },
+            ],
+        },
+    }
+
+
+def test_load_txn_rules_flattens_with_campaign() -> None:
+    """Rules are flattened and stamped with the campaign that taught them."""
+    with (
+        patch("src.enterprise.registry.list_artifacts", return_value=[_txn_artifact()]),
+        patch("src.enterprise.registry.record_consumption") as mock_receipt,
+        patch("src.enterprise.events.emit_event_sync"),
+    ):
+        rules = load_txn_rules()
+
+    assert len(rules) == 2
+    assert rules[0]["campaign"] == "SCAM-042"
+    assert rules[0]["action"] == "BLOCK"
+    mock_receipt.assert_called_once_with("art-txn", "financial_worker", client=None)
+
+
+def test_blocked_recipient_accounts_returns_digits_only() -> None:
+    """BLOCK rules on recipient_account become a digit-only deny set."""
+    with (
+        patch("src.enterprise.registry.list_artifacts", return_value=[_txn_artifact()]),
+        patch("src.enterprise.registry.record_consumption"),
+        patch("src.enterprise.events.emit_event_sync"),
+    ):
+        blocked = blocked_recipient_accounts()
+
+    assert blocked == {MULE_ACCOUNT}
+    # STEP_UP on `amount` must not leak into the recipient deny set.
+    assert "10000" not in blocked
+
+
+def test_blocked_recipient_accounts_empty_when_nothing_published() -> None:
+    """No published rule → nothing blocked, no exception."""
+    with patch("src.enterprise.registry.list_artifacts", return_value=[]):
+        assert blocked_recipient_accounts() == set()
+
+
+def test_financial_worker_hard_blocks_published_mule_account() -> None:
+    """A published BLOCK rule reaches the financial finding deterministically.
+
+    The transfer is unremarkable by every behavioural heuristic — modest amount,
+    known recipient, no case context — so a score of 100 is only possible if the
+    published rule was read.
+    """
+    from src.agents.workers.financial import _rule_based_financial_analysis
+
+    pending_tx = {
+        "amount": 300.0,
+        "sender_account": "6373-5093-3430-8430",
+        # Same account, dash-formatted the way a transaction would carry it:
+        # the match is on digits, so formatting must not defeat the rule.
+        "recipient_account": "1592-5588-7741",
+        "currency": "MYR",
+    }
+    history = {"avg_amount": 300.0, "known_recipients": [pending_tx["recipient_account"]]}
+
+    with (
+        patch("src.enterprise.registry.list_artifacts", return_value=[_txn_artifact()]),
+        patch("src.enterprise.registry.record_consumption"),
+        patch("src.enterprise.events.emit_event_sync"),
+    ):
+        finding = _rule_based_financial_analysis(pending_tx, history, None)
+
+    assert finding.score == 100
+    assert any("published campaign rule" in e for e in finding.evidence)
+
+
+def test_financial_worker_unaffected_without_published_rules() -> None:
+    """Fail-soft: no artifacts means the pre-artifact score is unchanged."""
+    from src.agents.workers.financial import _rule_based_financial_analysis
+
+    pending_tx = {
+        "amount": 300.0,
+        "sender_account": "6373-5093-3430-8430",
+        "recipient_account": "9999-8888-7777",
+        "currency": "MYR",
+    }
+    history = {"avg_amount": 300.0, "known_recipients": ["9999-8888-7777"]}
+
+    with patch("src.enterprise.registry.list_artifacts", return_value=[]):
+        finding = _rule_based_financial_analysis(pending_tx, history, None)
+
+    assert finding.score == 10
+    assert not any("published campaign rule" in e for e in finding.evidence)

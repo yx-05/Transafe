@@ -29,7 +29,7 @@ import logging
 from typing import Any
 
 from src.enterprise.events import emit_event
-from src.enterprise.registry import publish_artifact, record_consumption
+from src.enterprise.registry import publish_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -135,17 +135,17 @@ async def propagate_artifact(artifact: dict[str, Any]) -> list[dict[str, Any]]:
             "agent_name": agent_name,
         }
 
-        status = "acknowledged"
+        status = "offered"
         try:
+            # Offer only. The receipt and the ``propagation_acknowledged`` event
+            # are written by the consuming agent when it actually reads the
+            # artifact (``agents/workers/artifact_feed.py::_write_receipt``).
+            # Writing them here made the receipt a claim about a notification
+            # rather than about consumption, so ``artifact_consumption`` showed
+            # a closed loop for agents that had read nothing.
             await emit_event(
                 layer="propagation",
                 event_type="propagation_event",
-                payload=payload,
-            )
-            record_consumption(artifact_id, agent_name)
-            await emit_event(
-                layer="propagation",
-                event_type="propagation_acknowledged",
                 payload=payload,
             )
         except Exception:
