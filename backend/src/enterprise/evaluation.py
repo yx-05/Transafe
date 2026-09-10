@@ -449,6 +449,7 @@ async def run_evaluation(
     run_id: str | None = None,
     label: str | None = None,
     core_content: str | None = None,
+    core_version: int | None = None,
     use_llm: bool | None = None,
     store: bool = True,
     client: Any | None = None,
@@ -462,6 +463,11 @@ async def run_evaluation(
         core_content: Explicit core-skill body to evaluate against. When
             omitted the published artifact is used, so an un-migrated database
             simply means "no core rules yet".
+        core_version: Version number that ``core_content`` was pinned to. Only
+            read when ``core_content`` is given, because a pinned body carries
+            no version of its own — without this the stored ``artifact_ver``
+            would record ``phone_core: None`` and two pinned passes would look
+            like the same configuration.
         use_llm: Force LLM MO extraction on or off. Defaults to the
             ``EVAL_USE_LLM`` environment variable (off), which keeps a demo run
             fast and reproducible.
@@ -481,7 +487,12 @@ async def run_evaluation(
     cases = _load_corpus(root)
     ground_truth = load_eval_ground_truth(root)
     profile = campaign_profile()
-    core_rules, core_version = active_core_rules(core_content, client=client)
+    core_rules, resolved_core_version = active_core_rules(core_content, client=client)
+    if resolved_core_version is None:
+        # Either nothing is published, or the body was pinned: in both cases
+        # fall back to the caller's declared version so the snapshot names the
+        # configuration this run actually scored.
+        resolved_core_version = core_version
 
     await emit_event(
         layer="registry",
@@ -491,7 +502,7 @@ async def run_evaluation(
             "label": label,
             "corpus_size": len(cases),
             "core_rules": sorted(core_rules),
-            "core_version": core_version,
+            "core_version": resolved_core_version,
         },
         severity="info",
         run_id=run_id,
@@ -529,7 +540,7 @@ async def run_evaluation(
     summary["mean_latency_ms"] = round(sum(latencies) / len(latencies), 3) if latencies else 0.0
     summary["core_rules"] = sorted(core_rules)
 
-    artifact_ver = _artifact_versions(core_version, client=client)
+    artifact_ver = _artifact_versions(resolved_core_version, client=client)
 
     result: dict[str, Any] = {
         "run_id": run_id,
@@ -779,6 +790,12 @@ def get_eval_comparison(client: Any | None = None) -> dict[str, Any]:
     mean_latency_ms, artifact_ver}`` per side and must render *something* when
     only one run (or no run) exists.
 
+    It also carries ``base_detection``, ``redteam_detection`` and ``noise_fp``.
+    These are the split the corpus is actually built around — 20 wave variants,
+    10 red-team mutations, 10 legitimate controls — and without them the console
+    can only show one blended ``detected/total`` number, which hides whether a
+    miss came from a red-team evasion or an ordinary corpus miss.
+
     Args:
         client: Optional injected Supabase client.
 
@@ -800,6 +817,9 @@ def get_eval_comparison(client: Any | None = None) -> dict[str, Any]:
             "false_positives": summary.get("false_positives", 0),
             "fp_total": summary.get("fp_total", 0),
             "mean_latency_ms": summary.get("mean_latency_ms", 0),
+            "base_detection": summary.get("base_detection", 0.0),
+            "redteam_detection": summary.get("redteam_detection", 0.0),
+            "noise_fp": summary.get("noise_fp", 0.0),
             "artifact_ver": summary.get("artifact_ver") or {},
         }
 

@@ -107,7 +107,7 @@ async def run_adaptation_loop(
     """
     cycle_id = str(uuid4())
     root = Path(corpus_dir) if corpus_dir else EVAL_DIR
-    base_content = _current_core_content(client=client)
+    base_content, base_version = _current_core_artifact(client=client)
 
     await emit_event(
         layer="compiler",
@@ -121,6 +121,7 @@ async def run_adaptation_loop(
         corpus_dir=root,
         label="before adaptation",
         core_content=base_content,
+        core_version=base_version,
         use_llm=use_llm,
         client=client,
     )
@@ -233,6 +234,7 @@ async def run_adaptation_loop(
         corpus_dir=root,
         label="after adaptation",
         core_content=patched_content,
+        core_version=(artifact or {}).get("version") or base_version,
         use_llm=use_llm,
         client=client,
     )
@@ -423,13 +425,27 @@ def _next_rule_id(core_content: str) -> str:
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def _current_core_content(client: Any | None = None) -> str:
     """Return the published core-skill body, or the documented default."""
+    return _current_core_artifact(client=client)[0]
+
+
+def _current_core_artifact(client: Any | None = None) -> tuple[str, int | None]:
+    """Return ``(body, version)`` of the published core skill.
+
+    The version travels with the body because every pass below pins an explicit
+    ``core_content``, and a pinned body carries no version of its own — without
+    it the stored ``artifact_ver`` reads ``phone_agent_core: None`` and the
+    console cannot say which configuration a side of the chart represents.
+    """
     try:
         artifact = registry.get_artifact(CORE_ARTIFACT_NAME, client=client)
     except Exception as exc:  # pragma: no cover - registry already guards
         logger.warning("core artifact lookup failed: %s", exc)
         artifact = None
     content = str((artifact or {}).get("content") or "").strip()
-    return content or DEFAULT_CORE_CONTENT
+    version = (artifact or {}).get("version")
+    if not content:
+        return DEFAULT_CORE_CONTENT, version
+    return content, version
 
 
 def _missed_ids(run: dict[str, Any]) -> list[str]:

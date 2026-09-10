@@ -102,6 +102,18 @@ export interface EvalRunSummary {
   false_positives: number;
   fp_total: number;
   mean_latency_ms: number | null;
+  /**
+   * Detection on the base wave variants (0–1).
+   *
+   * Split out from `detected/total` because that blended figure averages the
+   * base corpus with the red-team mutations, which hides whether a miss came
+   * from an evasion attempt or an ordinary wave variant.
+   */
+  base_detection?: number;
+  /** Detection on the red-team mutations (0–1). */
+  redteam_detection?: number;
+  /** False-positive rate on the legitimate controls (0–1). */
+  noise_fp?: number;
   artifact_ver: Record<string, number>;
 }
 
@@ -117,6 +129,29 @@ export interface EvalRunResponse {
   run_id: string;
   label: string;
   status: string;
+}
+
+/**
+ * One blue-team cycle (`POST /eval/adaptation`).
+ *
+ * Only some keys are typed because the endpoint reports whatever the cycle
+ * managed to do: `status` distinguishes "learned something and proved it"
+ * (`applied`) from "found no invariant" (`no_proposal`), "no misses" and
+ * "below_threshold". A UI that assumed a proposal always exists would claim a
+ * lesson that was never learned.
+ */
+export interface AdaptationRunResponse {
+  cycle_id?: string;
+  status?: string;
+  auto_approved?: boolean;
+  confidence?: number;
+  adaptation?: {
+    pre_detection?: number;
+    post_detection?: number;
+    delta?: number;
+    newly_detected?: string[];
+    regressed?: string[];
+  } | null;
 }
 
 /**

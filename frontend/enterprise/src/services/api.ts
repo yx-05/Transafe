@@ -23,6 +23,7 @@
 
 import type {
   ActionResponse,
+  AdaptationRunResponse,
   ArtifactsResponse,
   CampaignsResponse,
   CaseFilters,
@@ -297,6 +298,17 @@ export const api = {
       run_id: "fixture-run",
       label: "after",
       status: "completed",
+    })),
+  /**
+   * The blue-team half: score the corpus, generalise a rule from the misses,
+   * auto-approve it if its measured confidence clears the threshold, then
+   * re-score. Publishes a new core-skill version, so this is the one button
+   * here that changes system state.
+   */
+  runAdaptation: () =>
+    sendJSON<AdaptationRunResponse>("/eval/adaptation", "POST", {}, () => ({
+      cycle_id: "fixture-cycle",
+      status: "fixture",
     })),
   getLatestEval: () => fetchJSON<EvalComparison>("/eval/latest", mocks.mockEval),
 

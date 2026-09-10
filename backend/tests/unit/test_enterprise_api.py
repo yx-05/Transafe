@@ -11,7 +11,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from main import app
-from src.api.enterprise.router import APPROVABLE_STATUSES, REJECTABLE_STATUSES
+from src.api.enterprise.router import (
+    APPROVABLE_STATUSES,
+    REJECTABLE_STATUSES,
+    _eval_passes,
+)
 
 client = TestClient(app)
 
@@ -36,6 +40,151 @@ def test_reject_route_is_mounted() -> None:
     paths = app.openapi()["paths"]
     assert "/enterprise/campaigns/{campaign_id}/reject" in paths
     assert not any(p.startswith("/enterprise/api/") for p in paths)
+
+
+# ── eval pass pairing ──────────────────────────────────────────────────────
+#
+# One press of RUN EVAL must produce a before/after pair scored against two
+# different core versions. A single unpinned pass per press scores both sides
+# against whatever is published *now*, so the delta is structurally always
+# zero — the chart then shows two identical bars, which is worse than showing
+# nothing because it looks like the system failed to learn.
+
+
+def _version_rows(*versions: tuple[int, str, str]) -> list[dict[str, object]]:
+    """Build registry rows as ``list_artifact_versions`` returns them."""
+    return [
+        {"version": v, "content": content, "status": status}
+        for v, content, status in versions
+    ]
+
+
+def test_eval_passes_pins_before_and_after_to_distinct_versions() -> None:
+    """Two published versions yield a before pass and an after pass."""
+    rows = _version_rows(
+        (7, "R-1: learned body", "PUBLISHED"),
+        (6, "R-1: baseline body", "PUBLISHED"),
+    )
+    with patch(
+        "src.api.enterprise.router.registry.list_artifact_versions",
+        return_value=rows,
+    ):
+        passes = _eval_passes("manual")
+
+    assert len(passes) == 2
+    before, after = passes
+    assert before[0] == "before · core v6"
+    assert before[1] == "R-1: baseline body"
+    assert before[2] == 6
+    assert after[0] == "after · core v7"
+    assert after[1] == "R-1: learned body"
+    assert after[2] == 7
+
+
+def test_eval_passes_returns_before_first_so_latest_pairs_them_correctly() -> None:
+    """The before pass must be listed first.
+
+    ``/eval/latest`` reads the two newest ``eval_runs`` rows and calls the
+    older one "before". The rows are written in list order, so listing the
+    after pass first would invert the chart and show learning running
+    backwards.
+    """
+    rows = _version_rows(
+        (7, "new", "PUBLISHED"),
+        (6, "old", "PUBLISHED"),
+    )
+    with patch(
+        "src.api.enterprise.router.registry.list_artifact_versions",
+        return_value=rows,
+    ):
+        passes = _eval_passes("manual")
+
+    assert passes[0][2] == 6
+    assert passes[-1][2] == 7
+
+
+def test_eval_passes_ignores_unpublished_versions() -> None:
+    """Drafts must not be scored as if they were deployed."""
+    rows = _version_rows(
+        (9, "draft", "DRAFT"),
+        (7, "live", "PUBLISHED"),
+        (6, "previous", "PUBLISHED"),
+    )
+    with patch(
+        "src.api.enterprise.router.registry.list_artifact_versions",
+        return_value=rows,
+    ):
+        passes = _eval_passes("manual")
+
+    assert [p[2] for p in passes] == [6, 7]
+
+
+def test_eval_passes_single_version_runs_a_baseline() -> None:
+    """One version means nothing to compare — one pass, not a fake delta."""
+    rows = _version_rows((6, "only", "PUBLISHED"))
+    with patch(
+        "src.api.enterprise.router.registry.list_artifact_versions",
+        return_value=rows,
+    ):
+        passes = _eval_passes("manual")
+
+    assert len(passes) == 1
+    assert passes[0][0] == "baseline · core v6"
+    assert passes[0][2] == 6
+
+
+def test_eval_passes_with_no_versions_scores_without_core_rules() -> None:
+    """An un-migrated database must still be evaluable, not raise."""
+    with patch(
+        "src.api.enterprise.router.registry.list_artifact_versions",
+        return_value=[],
+    ):
+        passes = _eval_passes("manual")
+
+    assert len(passes) == 1
+    assert passes[0] == ("manual", None, None)
+
+
+def test_eval_passes_survives_a_registry_failure() -> None:
+    """A registry outage degrades to a single unpinned pass."""
+    with patch(
+        "src.api.enterprise.router.registry.list_artifact_versions",
+        side_effect=RuntimeError("registry down"),
+    ):
+        passes = _eval_passes("manual")
+
+    assert passes == [("manual", None, None)]
+
+
+def test_eval_passes_prefixes_a_custom_label() -> None:
+    """A caller-supplied label survives into the row, so runs stay traceable."""
+    rows = _version_rows(
+        (7, "new", "PUBLISHED"),
+        (6, "old", "PUBLISHED"),
+    )
+    with patch(
+        "src.api.enterprise.router.registry.list_artifact_versions",
+        return_value=rows,
+    ):
+        passes = _eval_passes("red-team drill")
+
+    assert passes[0][0] == "red-team drill · before · core v6"
+    assert passes[1][0] == "red-team drill · after · core v7"
+
+
+def test_eval_passes_treats_the_default_label_as_no_prefix() -> None:
+    """The console posts ``{}``, which must read as a clean label, not "manual "."""
+    rows = _version_rows(
+        (7, "new", "PUBLISHED"),
+        (6, "old", "PUBLISHED"),
+    )
+    with patch(
+        "src.api.enterprise.router.registry.list_artifact_versions",
+        return_value=rows,
+    ):
+        passes = _eval_passes("manual")
+
+    assert passes[0][0].startswith("before")
 
 
 def test_reject_and_approve_share_the_same_gate() -> None:

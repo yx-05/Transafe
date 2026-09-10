@@ -749,6 +749,9 @@ export const mockEval = (): EvalComparison => ({
     false_positives: 3,
     fp_total: 10,
     mean_latency_ms: 1240,
+    base_detection: 0.6,
+    redteam_detection: 0.1,
+    noise_fp: 0.3,
     artifact_ver: { phone_agent_core: 6 },
   },
   after: {
@@ -760,6 +763,9 @@ export const mockEval = (): EvalComparison => ({
     false_positives: 1,
     fp_total: 10,
     mean_latency_ms: 1180,
+    base_detection: 0.95,
+    redteam_detection: 0.8,
+    noise_fp: 0.1,
     artifact_ver: { phone_agent_core: 7, "SCAM-027.json": 1 },
   },
 });

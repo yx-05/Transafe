@@ -15,6 +15,7 @@ import pytest
 
 from src.enterprise import evaluation
 from src.enterprise.evaluation import (
+    CORE_ARTIFACT_NAME,
     DETECTION_THRESHOLD,
     STRUCTURAL_RULE,
     _load_corpus,
@@ -396,3 +397,89 @@ async def test_run_evaluation_with_structural_rule(
         use_llm=False,
     )
     assert STRUCTURAL_RULE in result.get("core_rules", [])
+
+
+@pytest.mark.asyncio
+@patch("src.enterprise.evaluation.get_supabase_client")
+@patch("src.enterprise.evaluation.emit_event")
+@patch("src.enterprise.evaluation.registry")
+async def test_run_evaluation_records_the_version_a_pinned_body_came_from(
+    mock_registry: MagicMock,
+    mock_emit: MagicMock,
+    mock_client: MagicMock,
+    tmp_path,
+):
+    """A pinned body must report its version, not ``None``.
+
+    ``active_core_rules`` cannot infer a version from an explicit body, so
+    without an explicit ``core_version`` every pinned pass stored
+    ``phone_core: None`` — which made two runs of two *different* core versions
+    look like the same configuration, and the console's before/after pair
+    indistinguishable.
+    """
+    mock_registry.get_artifact.return_value = None
+    mock_registry.list_artifacts.return_value = []
+    mock_emit.return_value = None
+    mock_client.return_value.table.return_value.insert.return_value.execute = (
+        MagicMock(data=[])
+    )
+
+    (tmp_path / "base").mkdir()
+    (tmp_path / "noise").mkdir()
+    (tmp_path / "base" / "c1.json").write_text(
+        '{"case_id": "c1", "is_scam": true, '
+        '"transcript": [{"speaker": "SCAMMER", '
+        '"utterance": "transfer to safe account"}]}'
+    )
+    (tmp_path / "noise" / "n1.json").write_text(
+        '{"case_id": "n1", "is_scam": false, '
+        '"transcript": [{"speaker": "CALLER", '
+        '"utterance": "hello"}]}'
+    )
+
+    result = await evaluation.run_evaluation(
+        corpus_dir=tmp_path,
+        core_content="R-1: ignore this body for the assertion",
+        core_version=7,
+        store=False,
+        use_llm=False,
+    )
+    assert result["artifact_ver"][CORE_ARTIFACT_NAME] == 7
+
+
+@pytest.mark.asyncio
+@patch("src.enterprise.evaluation.get_supabase_client")
+@patch("src.enterprise.evaluation.emit_event")
+@patch("src.enterprise.evaluation.registry")
+async def test_run_evaluation_prefers_the_published_version_over_the_pinned_one(
+    mock_registry: MagicMock,
+    mock_emit: MagicMock,
+    mock_client: MagicMock,
+    tmp_path,
+):
+    """When nothing is pinned, the registry wins and ``core_version`` is ignored.
+
+    ``core_version`` is a *fallback* for pinned bodies only. An unpinned run
+    scores whatever is published, so its snapshot has to name that version
+    even if a caller passed a stale number.
+    """
+    mock_registry.get_artifact.return_value = {
+        "content": "R-1: structural rule body",
+        "version": 11,
+    }
+    mock_registry.list_artifacts.return_value = []
+    mock_emit.return_value = None
+    mock_client.return_value.table.return_value.insert.return_value.execute = (
+        MagicMock(data=[])
+    )
+
+    (tmp_path / "base").mkdir()
+    (tmp_path / "noise").mkdir()
+
+    result = await evaluation.run_evaluation(
+        corpus_dir=tmp_path,
+        core_version=3,
+        store=False,
+        use_llm=False,
+    )
+    assert result["artifact_ver"][CORE_ARTIFACT_NAME] == 11

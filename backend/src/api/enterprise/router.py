@@ -1833,6 +1833,74 @@ class EvalRunRequest(BaseModel):
     store: bool = Field(True, description="Persist the run to eval_runs")
 
 
+def _eval_passes(label: str) -> list[tuple[str, str | None, int | None]]:
+    """Build the pass list for one ``POST /eval/run``.
+
+    One press must produce the before/after pair the console draws — not two
+    runs of the same configuration, which is what a single unpinned pass per
+    press yields (both sides score against whatever is published *now*, so the
+    delta is always zero). Each pass therefore pins ``core_content`` to a
+    specific published version, holding the corpus constant while the learned
+    artifact varies.
+
+    The "before" pass is returned **first** on purpose: ``/eval/latest`` reads
+    the two most recent rows newest-first and calls the older of the pair
+    "before", so the before row must be written first.
+
+    With fewer than two published versions there is nothing to compare, so a
+    single pass is returned and the console renders one bar instead of a
+    fabricated delta.
+
+    Args:
+        label: Caller-supplied label, used as a prefix when it is not the
+            default. Empty prefix keeps the console's own labels readable.
+
+    Returns:
+        ``[(pass_label, core_content, core_version), ...]`` of length 1 or 2.
+        ``core_content`` is ``None`` when no artifact is published, meaning
+        "evaluate with no core rules".
+    """
+    from src.enterprise import evaluation
+
+    prefix = "" if not label or label == "manual" else f"{label} · "
+    try:
+        history = registry.list_artifact_versions(evaluation.CORE_ARTIFACT_NAME)
+    except Exception:
+        logger.warning("enterprise API: core version history unavailable")
+        history = []
+
+    published = [
+        row
+        for row in history or []
+        if str(row.get("status") or "").upper() == "PUBLISHED"
+    ]
+
+    if len(published) >= 2:
+        current, previous = published[0], published[1]
+        return [
+            (
+                f"{prefix}before · core v{previous.get('version')}",
+                previous.get("content"),
+                previous.get("version"),
+            ),
+            (
+                f"{prefix}after · core v{current.get('version')}",
+                current.get("content"),
+                current.get("version"),
+            ),
+        ]
+    if published:
+        current = published[0]
+        return [
+            (
+                f"{prefix}baseline · core v{current.get('version')}",
+                current.get("content"),
+                current.get("version"),
+            )
+        ]
+    return [(label or "manual", None, None)]
+
+
 @router.post("/eval/run")
 async def run_eval(body: EvalRunRequest | None = None) -> dict[str, Any]:
     """Run the evaluation corpus once and report what the run actually did.
@@ -1840,6 +1908,12 @@ async def run_eval(body: EvalRunRequest | None = None) -> dict[str, Any]:
     Response shape follows the console's ``EvalRunResponse``
     (``{run_id, label, status}``); the extra keys are diagnostics the client
     ignores.
+
+    One press runs the corpus against the **previously published** core version
+    and then against the **current** one (see :func:`_eval_passes`), so the
+    before/after pair the console draws is a real comparison of two learned
+    configurations rather than the same configuration twice. When only one
+    version is published, a single baseline pass runs instead.
 
     ``status`` is the honest part of this contract:
 
@@ -1862,42 +1936,63 @@ async def run_eval(body: EvalRunRequest | None = None) -> dict[str, Any]:
 
     Returns:
         Dict with ``run_id``, ``label``, ``status``, ``persisted``,
-        ``corpus_size`` and ``summary``.
+        ``corpus_size``, ``summary`` and ``passes`` (per-pass labels and the
+        core version each was pinned to).
     """
     from src.enterprise import evaluation
     from src.enterprise.corpus import EVAL_DIR
 
     req = body or EvalRunRequest()
+    # Identifies this *press*, not an individual pass: each pass gets its own
+    # uuid below because ``eval_runs.id`` is a primary key. A failure has no
+    # pass row to point at, so the press id is what the event and the response
+    # carry.
     run_id = str(uuid4())
+    passes = await asyncio.to_thread(_eval_passes, req.label)
 
     # run_evaluation emits eval_started and eval_completed itself, so the
     # start/finish pair is on ns_events for every run — including runs whose
     # rows never reach the database.
-    try:
-        result = await evaluation.run_evaluation(
-            EVAL_DIR,
-            run_id=run_id,
-            label=req.label,
-            use_llm=req.use_llm,
-            store=req.store,
+    result: dict[str, Any] = {}
+    completed: list[dict[str, Any]] = []
+    for pass_label, core_content, core_version in passes:
+        try:
+            result = await evaluation.run_evaluation(
+                EVAL_DIR,
+                run_id=str(uuid4()),
+                label=pass_label,
+                core_content=core_content,
+                core_version=core_version,
+                use_llm=req.use_llm,
+                store=req.store,
+            )
+        except Exception:
+            logger.exception("enterprise API: eval pass %r failed", pass_label)
+            await emit_event(
+                layer="registry",
+                event_type="eval_failed",
+                payload={"run_id": run_id, "label": pass_label},
+                severity="warning",
+                run_id=run_id,
+            )
+            return {
+                "run_id": run_id,
+                "label": pass_label,
+                "status": "failed",
+                "persisted": False,
+                "corpus_size": 0,
+                "summary": None,
+                "passes": [
+                    {"label": lbl, "core_version": ver} for lbl, _, ver in passes
+                ],
+            }
+        completed.append(
+            {
+                "run_id": str(result.get("run_id") or ""),
+                "label": pass_label,
+                "core_version": core_version,
+            }
         )
-    except Exception:
-        logger.exception("enterprise API: eval run %s failed", run_id)
-        await emit_event(
-            layer="registry",
-            event_type="eval_failed",
-            payload={"run_id": run_id, "label": req.label},
-            severity="warning",
-            run_id=run_id,
-        )
-        return {
-            "run_id": run_id,
-            "label": req.label,
-            "status": "failed",
-            "persisted": False,
-            "corpus_size": 0,
-            "summary": None,
-        }
 
     persisted = bool(result.get("stored_id"))
     return {
@@ -1907,6 +2002,7 @@ async def run_eval(body: EvalRunRequest | None = None) -> dict[str, Any]:
         "persisted": persisted,
         "corpus_size": int(result.get("corpus_size") or 0),
         "summary": result.get("summary") or {},
+        "passes": completed,
     }
 
 
