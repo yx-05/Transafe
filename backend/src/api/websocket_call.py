@@ -25,6 +25,7 @@ from src.db.supabase import (
     insert_case_entities,
     insert_fraud_case,
 )
+from src.enterprise.ingest import notify_case_completed
 from src.services.call_precheck import run_call_precheck
 from src.services.stt import transcribe_audio_chunk
 from src.services.stt_streaming import DeepgramStreamingSession
@@ -117,10 +118,27 @@ async def _finalize_ended_call(call_session_id: str) -> None:
         print(f"[DEEP ANALYSIS ❌] {call_session_id} call-end: {err}")
 
     # Persist every call (even LOW risk) as a case so the user can label it later.
+    case_id: str | None = None
     try:
-        await _persist_call_case(call_session_id, deep_event)
+        case_id = await _persist_call_case(call_session_id, deep_event)
     except Exception as err:  # noqa: BLE001
         print(f"[PERSIST CASE ❌] {call_session_id}: {err}")
+
+    # v1 → v2 handoff. Fire-and-forget: notify_case_completed schedules a
+    # background task and returns. The call has already ended and `call_ended`
+    # has already been broadcast, so nothing downstream of here can affect a
+    # live call.
+    #
+    # Wrapped rather than trusted. It raises nothing today, but that is the
+    # callee's discipline, not this function's structure: one future edit that
+    # throws before its own try — a module-level lookup, an import moved inside
+    # — and the teardown below would stop running, leaking an audio buffer per
+    # ended call into a live v1 service. The buffers are v1's to free whatever
+    # v2 does, so the guarantee belongs here where it can be seen.
+    try:
+        notify_case_completed(case_id)
+    except Exception as err:  # noqa: BLE001
+        print(f"[V2 INGEST ❌] {call_session_id}: {err}")
 
     # Clean up audio buffers immediately
     call_audio_buffers.pop(call_session_id, None)

@@ -10,9 +10,15 @@
  *     backend degrades per-table to 0/[] rather than 500. An empty result is a
  *     real answer and is NOT replaced with a fixture.
  *
- *  2. NOT YET IMPLEMENTED — campaigns detail, artifacts, eval, mcp, demo.
- *     These 404/throw and fall back to a fixture so screens D–G stay
- *     demoable. Set VITE_DISABLE_MOCKS=true to make that loud instead.
+ *  2. FIXTURE-BACKED ON FAILURE — campaigns detail, artifacts, eval, mcp,
+ *     demo. Most of these are now implemented server-side; the fixture is a
+ *     fallback for a failed request, not a placeholder for a missing route.
+ *
+ * On any failed request the fixture is served and `isServingFixture()` flips
+ * permanently, which the shell renders as a FIXTURE badge. Fabricated data
+ * that is indistinguishable from real data on screen is the worst failure
+ * mode this client has, so the fallback is never silent. Set
+ * VITE_DISABLE_MOCKS=true to turn it into a thrown error instead.
  */
 
 import type {
@@ -44,10 +50,71 @@ const MOCKS_DISABLED =
   typeof import.meta !== "undefined" &&
   import.meta.env?.VITE_DISABLE_MOCKS === "true";
 
-/** Set once any request succeeds; surfaced in the shell badge. */
+/** Set once any request succeeds. Null until the first request resolves. */
 let backendReachable: boolean | null = null;
 export function isBackendReachable(): boolean | null {
   return backendReachable;
+}
+
+/**
+ * Set the first time a fixture is served in place of a real response, and
+ * never cleared for the life of the page.
+ *
+ * Sticky on purpose. A screen that fell back once has shown fabricated data
+ * to whoever was watching, and a later successful request does not unshow it.
+ * Clearing this on recovery would reproduce the exact failure it exists to
+ * expose: an indicator that reads healthy while the thing it reports on
+ * already went wrong.
+ */
+let servedFixture = false;
+let lastFixturePath: string | null = null;
+
+/**
+ * Listeners notified whenever a fixture is served.
+ *
+ * Polling this module from a `useEffect` keyed on some unrelated piece of
+ * state only catches a fallback that happens to coincide with that state
+ * changing. A fixture served by Screen E while the shell's overview sits
+ * unchanged went unannounced entirely — fabricated artifact rows on screen,
+ * no badge above them. The indicator has to be pushed, not sampled.
+ */
+type FixtureListener = () => void;
+const fixtureListeners = new Set<FixtureListener>();
+
+export function subscribeFixture(listener: FixtureListener): () => void {
+  fixtureListeners.add(listener);
+  return () => {
+    fixtureListeners.delete(listener);
+  };
+}
+
+export function isServingFixture(): boolean {
+  return servedFixture;
+}
+
+export function lastFixtureRoute(): string | null {
+  return lastFixturePath;
+}
+
+/**
+ * Record that fabricated data was rendered for `path` and tell anyone
+ * watching. Exported because the fixture fallback is not confined to
+ * `request` — `loadReplaySequence` can reach its bundled corpus after a
+ * perfectly successful request that simply returned an empty log.
+ */
+export function markFixtureServed(path: string): void {
+  const changed = !servedFixture || lastFixturePath !== path;
+  servedFixture = true;
+  lastFixturePath = path;
+  if (changed) for (const listener of fixtureListeners) listener();
+}
+
+/** Test-only: reset fixture tracking between cases. */
+export function __resetFixtureState(): void {
+  servedFixture = false;
+  lastFixturePath = null;
+  backendReachable = null;
+  for (const listener of fixtureListeners) listener();
 }
 
 export function toQuery(params?: Record<string, unknown>): string {
@@ -73,9 +140,23 @@ async function request<T>(
   } catch (err) {
     backendReachable = false;
     if (MOCKS_DISABLED) throw err;
+    markFixtureServed(path);
     console.warn(`[api] ${path} unavailable, serving fixture:`, err);
     return fallback();
   }
+}
+
+/**
+ * A request with **no fixture fallback**.
+ *
+ * For endpoints where a fabricated success is worse than a visible failure —
+ * a write the operator believes landed but which never reached the database.
+ */
+async function requestStrict<T>(path: string, init: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, init);
+  if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+  backendReachable = true;
+  return (await res.json()) as T;
 }
 
 function fetchJSON<T>(
@@ -149,7 +230,11 @@ export const api = {
       adapt.normaliseCampaigns,
     ),
   getCampaign: (id: string) =>
-    fetchJSON<CampaignDetail>(`/campaigns/${id}`, () => mocks.mockCampaignDetail(id)),
+    fetchJSON<CampaignDetail>(
+      `/campaigns/${id}`,
+      () => mocks.mockCampaignDetail(id),
+      (raw) => adapt.normaliseCampaignDetail(raw, id),
+    ),
   approveCampaign: (id: string) =>
     sendJSON<ActionResponse>(`/campaigns/${id}/approve`, "POST", {}, () => ({
       ok: true,
@@ -160,19 +245,44 @@ export const api = {
       ok: true,
       message: "rejected (fixture)",
     })),
-  editCampaign: (id: string, edits: Record<string, unknown>) =>
-    sendJSON<CampaignDetail>(`/campaigns/${id}`, "PATCH", edits, () => ({
-      ...mocks.mockCampaignDetail(id),
-      ...(edits as Partial<CampaignDetail>),
-    })),
+  /**
+   * PATCH /enterprise/campaigns/{id}.
+   *
+   * The route exists (`router.edit_campaign`) and returns the re-read
+   * `CampaignDetail`, not an echo of the request. Accepts `{name?, mo_summary?,
+   * indicators?, edited_by}` under `extra="forbid"`, so an unrecognised key is
+   * a 422 rather than a 200 with the field silently dropped.
+   *
+   * Deliberately no fixture fallback: the original merged the operator's edits
+   * into a mock campaign and returned it as a saved record, so the console
+   * closed the editor on a write that never happened. Every refusal must stay
+   * visible — 409 once the campaign leaves an editable status (approval has
+   * already compiled and propagated the hypothesis), 422 on an empty or
+   * name-blanking body, 404, 503. These surface as a thrown error carrying the
+   * status code; the wording is generic, which is a known gap, but the polarity
+   * is right: a failed edit never reads as a saved one.
+   */
+  editCampaign: async (id: string, edits: Record<string, unknown>) =>
+    adapt.normaliseCampaignDetail(
+      await requestStrict<unknown>(`/campaigns/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(edits),
+      }),
+      id,
+    ),
 
   getArtifacts: (tier?: "core" | "pack") =>
-    fetchJSON<ArtifactsResponse>(`/artifacts${tier ? `?tier=${tier}` : ""}`, () =>
-      mocks.mockArtifacts(tier),
+    fetchJSON<ArtifactsResponse>(
+      `/artifacts${tier ? `?tier=${tier}` : ""}`,
+      () => mocks.mockArtifacts(tier),
+      adapt.normaliseArtifacts,
     ),
   getArtifact: (name: string, version?: number | "latest") =>
-    fetchJSON<ArtifactDetail>(`/artifacts/${name}/${version ?? "latest"}`, () =>
-      mocks.mockArtifactDetail(name, version),
+    fetchJSON<ArtifactDetail>(
+      `/artifacts/${name}/${version ?? "latest"}`,
+      () => mocks.mockArtifactDetail(name, version),
+      (raw) => adapt.normaliseArtifactDetail(raw, name),
     ),
   rollbackArtifact: (name: string, version?: number) =>
     sendJSON<ActionResponse>(

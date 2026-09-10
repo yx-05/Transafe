@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from src.enterprise.linkage import (
     LINK_THRESHOLD,
+    NARRATIVE_GATE_COSINE,
     _mo_structural_overlap,
     _narrative_similarity,
     _temporal_multiplier,
@@ -44,6 +45,60 @@ def test_score_case_pair_narrative_below_gate_excluded():
     result = score_case_pair(CASE_A, CASE_B, [], [], emb_a, emb_b)
     assert result["signals"]["narrative"]["below_gate"] is True
     assert result["score"] == 0.0
+
+
+def test_score_case_pair_coerces_json_string_embeddings_without_crashing():
+    """``case_mo.embedding`` comes back from PostgREST as a JSON *string*.
+
+    Two failure modes hid behind that, and which one fired depended on nothing
+    more than character count. ``_narrative_similarity`` guards on
+    ``len(a) != len(b)``, which on strings counts *characters*:
+
+    * unequal length  -> returns ``None``, the signal vanishes silently
+    * **equal length  -> the guard passes and ``a * b`` runs on str, raising
+      an uncaught ``TypeError`` inside a discovery sweep**
+
+    The stored seed vectors happen to serialise to unequal lengths, so only the
+    silent branch has been observed. Fixed-precision embeddings (what a real
+    provider returns) serialise to equal lengths, making the crash the *more*
+    likely outcome once the vectors are regenerated.
+
+    The two literals below are deliberately the same character count; the
+    length assertion pins that, because equalising them is the whole point of
+    the test and a later edit could silently retarget it at the harmless branch.
+    """
+    emb_a = "[1.0, 0.0, 0.0]"
+    emb_b = "[0.0, 1.0, 0.0]"
+    assert len(emb_a) == len(emb_b), "must exercise the crash branch, not the None branch"
+
+    result = score_case_pair(CASE_A, CASE_B, [], [], emb_a, emb_b)
+
+    # Evaluable, and recorded as evidence rather than silently omitted.
+    assert result["signals"]["narrative"]["below_gate"] is True
+    assert result["signals"]["narrative"]["cosine"] == 0.0
+
+    # Invariance: a sub-gate cosine appends no weight, so the score is
+    # bit-identical to the same pair scored with no embeddings at all.
+    baseline = score_case_pair(CASE_A, CASE_B, [], [], None, None)
+    assert result["score"] == baseline["score"]
+    assert "narrative" not in baseline["signals"]
+
+
+def test_score_case_pair_json_string_embeddings_parse_to_correct_floats():
+    """Control for the coercion test: presence is not correctness.
+
+    A ``_coerce_embedding`` that parsed to the wrong numbers would still make
+    every pair land ``below_gate`` — the sub-gate assertion alone cannot tell a
+    working parser from a broken one. This pair clears the 0.82 gate only if
+    the floats survive the round-trip intact.
+    """
+    result = score_case_pair(CASE_A, CASE_B, [], [], "[1.0, 0.0, 0.0]", "[0.9, 0.1, 0.0]")
+
+    narrative = result["signals"]["narrative"]
+    assert narrative["cosine"] >= NARRATIVE_GATE_COSINE
+    assert "below_gate" not in narrative
+    assert narrative["weight"] > 0
+    assert result["score"] > 0
 
 
 def test_score_case_pair_noisy_or_fusion():

@@ -1,8 +1,14 @@
 """Artifact propagation — L5.
 
-Publishing an artifact emits a ``propagation_event`` per subscribed agent, and
-each agent acknowledges by writing a **consumption receipt** into
-``artifact_consumption`` (01_upgrade_plan.md §8, 03_artifact_registry.md §7).
+Publishing an artifact emits a ``propagation_event`` per subscribed agent and
+writes a **delivery receipt** into ``artifact_consumption``
+(01_upgrade_plan.md §8, 03_artifact_registry.md §7).
+
+The receipt is written *here*, by the propagation layer, not by the agent. It
+therefore records that an artifact was offered to a subscriber — not that the
+subscriber's behaviour changed. The behaviour change is a separate step the
+worker performs when it loads the pack (``agents/workers/artifact_feed.py``),
+which writes its own receipt on a real read.
 
 Propagation is what makes the learning loop *visible*: a publish fans out to
 its subscribers and the receipts come back, which is the observable difference

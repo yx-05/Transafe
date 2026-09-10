@@ -1,7 +1,6 @@
 """Unit tests for the adaptive case-labeling feature (fraud_cases.user_label + learned_keywords)."""
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -68,7 +67,7 @@ async def test_persist_call_case_writes_case_and_transcripts(
     mock_insert_case: MagicMock,
 ) -> None:
     """Assert _persist_call_case writes a fraud case + transcripts + entities."""
-    from src.api.websocket_call import call_phone_states, _persist_call_case
+    from src.api.websocket_call import _persist_call_case, call_phone_states
 
     mock_insert_case.return_value = "case-persisted-1"
     mock_store.get_call.return_value = {
@@ -124,7 +123,7 @@ async def test_persist_call_case_skips_without_transcript(
     mock_store: MagicMock,
 ) -> None:
     """Assert _persist_call_case returns None when there is no transcript."""
-    from src.api.websocket_call import call_phone_states, _persist_call_case
+    from src.api.websocket_call import _persist_call_case, call_phone_states
 
     call_phone_states["call-empty"] = {"transcript": []}
     try:

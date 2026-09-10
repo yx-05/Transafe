@@ -257,6 +257,104 @@ def span_minutes(first_seen: Any, last_seen: Any) -> int | None:
     return max(0, int((end - start).total_seconds() // 60))
 
 
+def _median(values: list[float]) -> float:
+    """Median of a non-empty list. Median, not mean: one case that sat in the
+    backlog over a weekend must not become the number on the wall."""
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def time_to_discovery_metric(
+    campaign_created_at: dict[str, Any],
+    memberships: list[dict[str, Any]],
+    case_created_at: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Measure how long a case waits between ingest and joining a campaign.
+
+    This is the console's headline ``OverviewMetric``. Every number in it is a
+    subtraction of two stored timestamps — ``campaign_cases.joined_at`` minus
+    ``fraud_cases.created_at`` — so it can be recomputed from the rows by
+    anyone who doubts it.
+
+    **What the two halves mean.** The bar's ``before``/``after`` are the two
+    cohorts of a campaign's member cases, split on whether the case existed
+    before the system had named the pattern:
+
+    ``before``
+        Cases already ingested when their campaign was created. They waited for
+        the pattern to be *discovered* — for enough sibling cases to accumulate
+        to clear the promotion gate.
+    ``after``
+        Cases ingested once the campaign already existed. They only had to be
+        *recognised* against a pattern the system already held.
+
+    That is a real before/after of the same measured quantity, and it is the
+    only one this database supports. It is **not** the "before TranSafe"
+    industry baseline the frontend spec's mock implies: nothing in this system
+    records how long a human analyst would have taken, and a constant lifted
+    from a report is exactly the fabricated metric this function exists to
+    avoid.
+
+    Returns ``None`` — meaning "omit this metric" — whenever either cohort is
+    empty. A one-sided comparison rendered as a two-sided bar would show a
+    ``0`` for the missing half, and a zero here reads as "discovered
+    instantly", which is the strongest claim on the screen and the one least
+    supported by data.
+
+    Args:
+        campaign_created_at: Campaign id → the campaign's ``created_at``, i.e.
+            the moment the pattern was named. Campaigns absent from this map
+            contribute nothing.
+        memberships: ``campaign_cases`` rows with ``campaign_id``, ``case_id``
+            and ``joined_at``.
+        case_created_at: Case id → the case's ``created_at`` (ingest).
+
+    Returns:
+        An ``OverviewMetric``-shaped dict, or ``None`` when it cannot be
+        measured on both sides.
+    """
+    before: list[float] = []
+    after: list[float] = []
+
+    for row in memberships or []:
+        named = _parse_ts(campaign_created_at.get(str(row.get("campaign_id") or "")))
+        ingested = _parse_ts(case_created_at.get(str(row.get("case_id") or "")))
+        clustered = _parse_ts(row.get("joined_at"))
+        if not (named and ingested and clustered):
+            continue
+        waited_min = (clustered - ingested).total_seconds() / 60.0
+        if waited_min < 0:
+            # Joined before it was ingested: clock skew or a hand-edited row.
+            # A negative latency is not a fast one, so it is dropped rather
+            # than averaged in where it would drag the median down.
+            continue
+        (after if ingested >= named else before).append(waited_min)
+
+    if not before or not after:
+        return None
+
+    return {
+        "label": "TIME TO DISCOVERY",
+        "before_value": round(_median(before), 1),
+        "after_value": round(_median(after), 1),
+        "unit": "min",
+        "lower_is_better": True,
+        # Diagnostics. The console ignores unknown keys; these are here so the
+        # number can be challenged — a median over two samples is not the same
+        # claim as a median over forty.
+        "basis": (
+            "median minutes from fraud_cases.created_at to campaign_cases.joined_at; "
+            "before = cases ingested before their campaign existed, "
+            "after = cases ingested once it did"
+        ),
+        "before_sample": len(before),
+        "after_sample": len(after),
+    }
+
+
 def trace_steps(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Map a case's ``ns_events`` onto the console's ``TraceStep[]``.
 
@@ -276,6 +374,7 @@ def trace_steps(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     Returns:
         List of ``{name, duration_ms, detail}``.
     """
+
     # ns_events timestamps its rows `ts`; `created_at` is accepted only so a
     # caller passing a differently-shaped row does not silently yield no steps.
     def _when(event: dict[str, Any]) -> Any:
@@ -658,8 +757,32 @@ def link_reason(
             break
 
         if not parts:
+            # Only a cosine that actually earned weight explains an edge. A
+            # sub-gate cosine contributed nothing to the score, so rendering it
+            # replaces the real justification with a near-zero number on the one
+            # screen where an operator is asked to trust the scoring.
+            #
+            # Tests the weight's *value*, not the presence of a marker and not
+            # the presence of a field. Both weaker forms admit a sub-gate cosine
+            # through some future emitter: ``not below_gate`` if the marker is
+            # ever omitted, ``weight is not None`` if a non-contributing signal
+            # is ever recorded as ``{"cosine": -0.01, "weight": 0.0}`` — which is
+            # a natural thing to write. ``> 0`` is the property the hover claims.
+            #
+            # ``float()`` under suppress rather than ``isinstance``: a weight
+            # arriving as a JSON string still counts as contribution, and a
+            # missing or unparseable one stays silent instead of raising.
             narrative = signals.get("narrative")
-            if isinstance(narrative, dict) and narrative.get("cosine") is not None:
+            narrative_weight: float | None = None
+            if isinstance(narrative, dict):
+                with contextlib.suppress(TypeError, ValueError):
+                    narrative_weight = float(narrative.get("weight"))  # type: ignore[arg-type]
+            if (
+                isinstance(narrative, dict)
+                and narrative.get("cosine") is not None
+                and narrative_weight is not None
+                and narrative_weight > 0
+            ):
                 parts.append(f"narrative cosine {float(narrative['cosine']):.2f}")
 
         if not parts and isinstance(signals.get("mo_overlap"), dict):
@@ -671,7 +794,24 @@ def link_reason(
     with contextlib.suppress(TypeError, ValueError):
         parts.append(f"w {float(score):.2f}")
 
+    # Two edges can carry an identical strongest signal and still differ in
+    # score, purely because one earned the temporal-proximity boost. Live data
+    # has pairs reading "shared DOMAIN bnm-verify…" at both 0.90 and 1.00;
+    # without naming the multiplier the hover asserts the same justification
+    # for two different numbers and the operator cannot tell them apart.
+    if isinstance(signals, dict):
+        temporal = signals.get("temporal")
+        if isinstance(temporal, dict) and temporal.get("applied"):
+            with contextlib.suppress(TypeError, ValueError):
+                multiplier = float(temporal.get("multiplier"))
+                if multiplier != 1.0:
+                    parts.append(f"temporal ×{multiplier:.2f}")
+
     if ordinal_a is not None and ordinal_b is not None:
-        parts.append(f"cases #{ordinal_a},#{ordinal_b}")
+        # case_links stores the pair ordered by UUID, which surfaces as
+        # "cases #119,#111"; operators read these as case numbers, so order
+        # them as numbers.
+        low, high = sorted((ordinal_a, ordinal_b))
+        parts.append(f"cases #{low},#{high}")
 
     return " · ".join(parts)

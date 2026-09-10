@@ -19,6 +19,7 @@ from src.agents.prompts import (
     get_phone_dialogue_guide,
 )
 from src.agents.state import GraphState, WorkerFinding
+from src.agents.workers.artifact_feed import load_learned_phrases
 from src.db.vector_store import check_blacklist, search_fraud_memory
 
 logger = logging.getLogger(__name__)
@@ -94,21 +95,32 @@ def _scan_high_risk_phrases(
     Shared by Listen Mode and Auto-Talk Mode so that scammer utterances are
     always surfaced with highlight spans in the UI, regardless of the active
     call mode. Returns (highlight_events, score_increment, evidence).
+
+    Scans the built-in ``HIGH_RISK_PHRASES`` **plus** phrases learned from
+    published campaign packs. The learned set is what makes an approved
+    campaign change detection rather than merely produce a receipt; evidence
+    for a learned phrase cites the campaign that taught it, so an analyst can
+    tell an inherited rule from a shipped one.
     """
     highlight_events: list[dict[str, Any]] = []
     score_increment = 0
     evidence: list[str] = []
 
+    learned = load_learned_phrases()
+    scan_phrases = list(HIGH_RISK_PHRASES) + [p for p in learned if p not in HIGH_RISK_PHRASES]
+
     for utt in transcript:
         raw_text = str(utt.get("text") or utt.get("utterance", ""))
         speaker = str(utt.get("speaker", "CALLER"))
         lower_text = raw_text.lower()
-        matched_phrases = [p for p in HIGH_RISK_PHRASES if p in lower_text]
+        matched_phrases = [p for p in scan_phrases if p in lower_text]
         if not matched_phrases:
             continue
         score_increment += len(matched_phrases) * 30
         for phrase in matched_phrases:
-            evidence.append(f"Spoken danger phrase detected: '{phrase}' by {speaker}")
+            source = learned.get(phrase)
+            origin = f" (learned from campaign {source})" if source else ""
+            evidence.append(f"Spoken danger phrase detected: '{phrase}' by {speaker}{origin}")
             highlight_events.append({
                 "utterance_id": str(utt.get("utterance_id", f"utt-{len(highlight_events)+1}")),
                 "speaker": speaker,

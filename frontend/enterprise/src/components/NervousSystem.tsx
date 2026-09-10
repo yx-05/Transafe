@@ -52,6 +52,40 @@ export const WORKERS: WorkerNode[] = [
   { id: "txn_monitor", label: "Txn", x: 360, y: 205 },
 ];
 
+/**
+ * Backend agent name -> worker node id.
+ *
+ * The propagation layer names its subscribers `phone_worker` /
+ * `phishing_worker` / `financial_worker` (SUBSCRIPTION_MAP in
+ * backend/src/enterprise/propagation.py). The node ids here predate that
+ * vocabulary and share no member with it, so a live propagation event
+ * resolved nothing before this map existed. Identity entries let a payload
+ * that already speaks node ids — the recorded REPLAY corpus — pass through
+ * unchanged, which is why REPLAY lit up while LIVE stayed dark.
+ */
+const AGENT_TO_WORKER: Record<string, string> = {
+  phone_worker: "phone_agent",
+  phishing_worker: "phishing_agent",
+  financial_worker: "txn_monitor",
+  phone_agent: "phone_agent",
+  phishing_agent: "phishing_agent",
+  txn_monitor: "txn_monitor",
+  fraud_ops: "fraud_ops",
+};
+
+/**
+ * Resolve the worker node a propagation event refers to.
+ *
+ * Reads both `agent` (recorded corpus) and `agent_name` (live backend).
+ * Returns null for an unrecognised agent rather than a falsy id, so an
+ * unmapped name stays visibly dark instead of silently matching node zero.
+ */
+export function workerIdForEvent(event: NsEvent): string | null {
+  const payload = event.payload as Record<string, unknown> | undefined;
+  const raw = String(payload?.agent ?? payload?.agent_name ?? "");
+  return AGENT_TO_WORKER[raw] ?? null;
+}
+
 const EXPOSURE = { id: "exposure", label: "MCP · CodeBuddy", x: 610, y: 205 };
 
 const NODE_W = 116;
@@ -108,8 +142,8 @@ export function NervousSystem() {
     }
 
     if (lastEvent.layer === "propagation") {
-      const agent = String(lastEvent.payload?.agent ?? "");
-      const worker = WORKERS.find((w) => w.id === agent);
+      const workerId = workerIdForEvent(lastEvent);
+      const worker = WORKERS.find((w) => w.id === workerId);
       if (worker) {
         const src = centre("propagation")!;
         newPulses.push({
@@ -138,7 +172,8 @@ export function NervousSystem() {
   const lastPropagationAgents = new Set(
     events
       .filter((e) => e.layer === "propagation")
-      .map((e) => String(e.payload?.agent ?? "")),
+      .map((e) => workerIdForEvent(e))
+      .filter((id): id is string => id !== null),
   );
 
   const exposureHeat = heatFor("exposure");

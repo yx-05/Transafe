@@ -6,14 +6,14 @@
  * └──────────────────────────────────────────────────────────────────────────┘
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { Activity, Play, RotateCcw, Repeat } from "lucide-react";
 import { useEventStore } from "../store/useEventStore";
 import { useCampaignStore } from "../store/useCampaignStore";
 import { useEventSubscription } from "../hooks/useEventSubscription";
 import { loadReplaySequence } from "../services/replay";
-import { api } from "../services/api";
+import { api, lastFixtureRoute, subscribeFixture } from "../services/api";
 import { formatNumber } from "../lib/format";
 
 const NAV = [
@@ -34,6 +34,16 @@ export function Shell() {
   const overview = useCampaignStore((s) => s.overview);
   const loadOverview = useCampaignStore((s) => s.loadOverview);
   const [busy, setBusy] = useState(false);
+
+  // Pushed, not sampled. Any screen can fall back to a fixture at any moment;
+  // the badge has to appear when that happens, not when the shell's own
+  // overview request next resolves. Screens E/F/G never touch `overview`, so
+  // a sampled flag left their fabricated rows completely unlabelled.
+  const fixtureRoute = useSyncExternalStore(
+    subscribeFixture,
+    lastFixtureRoute,
+    lastFixtureRoute,
+  );
 
   // Open the LIVE stream on mount. The socket replays a backlog on connect;
   // we also hydrate from GET /enterprise/events so a page refresh mid-demo
@@ -123,6 +133,19 @@ export function Shell() {
           </div>
 
           <div className="shell-actions">
+            {fixtureRoute !== null && (
+              <span
+                className="mode-badge fixture"
+                data-testid="fixture-badge"
+                title={
+                  `A request to ${fixtureRoute} failed and fabricated fixture ` +
+                  `data was rendered in its place. Screens on this page may not ` +
+                  `reflect the real system. Reload after restoring the backend.`
+                }
+              >
+                ⚠ FIXTURE
+              </span>
+            )}
             <span
               className={`mode-badge ${mode === "LIVE" ? "live" : "replay"}`}
               data-testid="mode-badge"

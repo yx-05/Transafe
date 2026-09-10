@@ -367,7 +367,20 @@ def record_consumption(
     agent_name: str,
     client: Any | None = None,
 ) -> bool:
-    """Record a consumption receipt proving an agent loaded an artifact.
+    """Record a receipt against ``(artifact_id, agent_name)``.
+
+    Note the receipt does **not** by itself prove the agent changed behaviour.
+    Two callers write here and they mean different things:
+
+    * ``propagation.propagate_artifact`` writes on *delivery* — the artifact
+      was offered to a subscriber.
+    * ``agents.workers.artifact_feed`` writes on *load* — the artifact's rules
+      were folded into what the worker detects with.
+
+    Both upsert the same row, so a receipt is currently the weaker of the two
+    claims: delivered. Distinguishing them needs a ``kind`` column on
+    ``artifact_consumption``; until that migration exists, do not read a
+    receipt as evidence of a behaviour change.
 
     Args:
         artifact_id: UUID of the artifact.

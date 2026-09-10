@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import NervousSystem, { EDGES, NODES, edgeForEvent } from "./NervousSystem";
+import NervousSystem, {
+  EDGES,
+  NODES,
+  WORKERS,
+  edgeForEvent,
+  workerIdForEvent,
+} from "./NervousSystem";
 import { makeEvent, resetEventStore, seedEvents } from "../test-utils";
 
 describe("NervousSystem", () => {
@@ -53,6 +59,75 @@ describe("NervousSystem", () => {
       "data-consumed",
       "true",
     );
+  });
+
+  // The test above seeds `{ agent: "phone_agent" }` — the shape the recorded
+  // REPLAY corpus emits. The live backend emits `{ agent_name: "phone_worker" }`
+  // instead, and shares no worker name with the console's node ids. So the
+  // suite above stayed green for a component that lit nothing in LIVE. These
+  // cases pin the live shape specifically.
+  it("resolves a LIVE propagation payload to a worker node", () => {
+    expect(
+      workerIdForEvent(
+        makeEvent({ layer: "propagation", payload: { agent_name: "phone_worker" } }),
+      ),
+    ).toBe("phone_agent");
+    expect(
+      workerIdForEvent(
+        makeEvent({ layer: "propagation", payload: { agent_name: "phishing_worker" } }),
+      ),
+    ).toBe("phishing_agent");
+    expect(
+      workerIdForEvent(
+        makeEvent({ layer: "propagation", payload: { agent_name: "financial_worker" } }),
+      ),
+    ).toBe("txn_monitor");
+  });
+
+  it("still resolves the recorded REPLAY payload shape", () => {
+    expect(
+      workerIdForEvent(
+        makeEvent({ layer: "propagation", payload: { agent: "phone_agent" } }),
+      ),
+    ).toBe("phone_agent");
+  });
+
+  it("returns null for an unknown agent rather than a falsy node id", () => {
+    expect(
+      workerIdForEvent(
+        makeEvent({ layer: "propagation", payload: { agent_name: "nope_worker" } }),
+      ),
+    ).toBeNull();
+    expect(workerIdForEvent(makeEvent({ layer: "propagation", payload: {} }))).toBeNull();
+  });
+
+  it("maps every backend subscriber name onto a real worker node", () => {
+    // Mirrors SUBSCRIPTION_MAP in backend/src/enterprise/propagation.py. If a
+    // subscriber is added there and not mapped here, its acknowledgement is
+    // silently invisible on screen — which is the failure this pins.
+    const ids = new Set(WORKERS.map((w) => w.id));
+    for (const backendName of ["phone_worker", "phishing_worker", "financial_worker"]) {
+      const mapped = workerIdForEvent(
+        makeEvent({ layer: "propagation", payload: { agent_name: backendName } }),
+      );
+      expect(mapped, `${backendName} is unmapped`).not.toBeNull();
+      expect(ids.has(mapped!), `${backendName} -> ${mapped} is not a node`).toBe(true);
+    }
+  });
+
+  it("lights the worker node from a LIVE-shaped propagation event", () => {
+    seedEvents([
+      makeEvent({
+        id: 7,
+        layer: "propagation",
+        event_type: "propagation_acknowledged",
+        payload: { agent_name: "financial_worker" },
+      }),
+    ]);
+    render(<NervousSystem />);
+    expect(
+      screen.getByTestId("nervous-system").querySelector('[data-worker="txn_monitor"]'),
+    ).toHaveAttribute("data-consumed", "true");
   });
 
   it("maps an event to the edge that carried it", () => {

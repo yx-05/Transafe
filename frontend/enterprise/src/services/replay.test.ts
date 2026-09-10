@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { latestRunId, loadReplaySequence } from "./replay";
-import { api } from "./api";
+import { api, markFixtureServed } from "./api";
 import { makeEvent } from "../test-utils";
 import type { NsEvent } from "../types/events";
 
@@ -20,9 +20,11 @@ import type { NsEvent } from "../types/events";
 
 vi.mock("./api", () => ({
   api: { getEvents: vi.fn() },
+  markFixtureServed: vi.fn(),
 }));
 
 const getEvents = vi.mocked(api.getEvents);
+const markFixture = vi.mocked(markFixtureServed);
 
 /**
  * An untagged event.
@@ -50,6 +52,7 @@ function mixedLog(): NsEvent[] {
 
 beforeEach(() => {
   getEvents.mockReset();
+  markFixture.mockReset();
 });
 
 describe("loadReplaySequence", () => {
@@ -101,6 +104,30 @@ describe("loadReplaySequence", () => {
     // The console must never be dead on stage; the bundled fixture is the
     // last resort and is expected to be non-empty.
     expect((await loadReplaySequence()).length).toBeGreaterThan(0);
+  });
+
+  it("flags the bundled corpus as a fixture when a healthy backend has an empty log", async () => {
+    // The dangerous case is not the unreachable backend — that already trips
+    // the fixture flag inside `api.getEvents`. It is the *successful* request
+    // that returns nothing: a fresh database, every request 200, no error
+    // anywhere. Replay then plays a scripted 100-event narrative — nerve nodes
+    // firing, a campaign proposed, artifacts published — that this system
+    // never performed, with no badge to say so.
+    getEvents.mockResolvedValue([]);
+
+    const played = await loadReplaySequence();
+
+    expect(played.length).toBeGreaterThan(0);
+    expect(markFixture).toHaveBeenCalledTimes(1);
+    expect(markFixture.mock.calls[0][0]).toMatch(/replay/i);
+  });
+
+  it("does not flag a fixture when the log actually had events", async () => {
+    getEvents.mockResolvedValue(mixedLog());
+
+    await loadReplaySequence();
+
+    expect(markFixture).not.toHaveBeenCalled();
   });
 });
 

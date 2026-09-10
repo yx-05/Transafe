@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -180,6 +181,11 @@ def resolve_entities(
 ) -> list[dict[str, Any]]:
     """Resolve and upsert entities for a case, then link them to the case.
 
+    Also refreshes each touched entity's ``case_count`` / ``last_seen``. Those
+    two columns default to ``0``/insert-time and nothing else in v2 writes them,
+    so without this step every node in the console's entity graph reports having
+    been seen in zero cases.
+
     Args:
         case_id: UUID of the fraud case.
         raw_entities: List of ``{"entity_type": ..., "value": ...}`` dicts.
@@ -249,8 +255,56 @@ def resolve_entities(
             ).execute()
         except Exception:
             logger.exception("Failed to resolve entity %s=%s", etype, raw_val)
+            continue
+
+        refresh_entity_stats(client, entity_id)
 
     return resolved
+
+
+def refresh_entity_stats(client: Any, entity_id: str, last_seen: str | None = None) -> None:
+    """Recompute ``entities.case_count`` / ``last_seen`` from the link table.
+
+    Derived, not incremented, so re-ingesting the same case is idempotent: the
+    count is however many distinct cases currently link to the entity, which a
+    second run of the same case cannot change (``case_entity_links`` is keyed on
+    ``(case_id, entity_id)``).
+
+    Best-effort. The entity and its link are already written by the time this
+    runs, so a failure here must not discard a successfully resolved entity —
+    it only leaves a stale counter behind. It also never writes a ``0``: a
+    count of zero means the link read failed or raced the write, and
+    overwriting a correct count with zero would turn a transient read error
+    into a permanently wrong number on the graph.
+
+    Args:
+        client: Supabase client.
+        entity_id: Entity UUID to recompute.
+        last_seen: Timestamp to record as the entity's ``last_seen``. Defaults
+            to now, which is right for live ingest — the case is arriving as
+            this runs. The demo seed must pass the corpus timestamp instead:
+            its cases are dated historically, and stamping them with wall-clock
+            now would silently rewrite the seeded graph's timeline to "all of
+            this happened this second".
+    """
+    try:
+        result = (
+            client.table("case_entity_links")
+            .select("case_id")
+            .eq("entity_id", entity_id)
+            .execute()
+        )
+        case_count = len(list(getattr(result, "data", None) or []))
+        if not case_count:
+            return
+        client.table("entities").update(
+            {
+                "case_count": case_count,
+                "last_seen": last_seen or datetime.now(UTC).isoformat(),
+            }
+        ).eq("id", entity_id).execute()
+    except Exception:
+        logger.exception("Failed to refresh case_count for entity %s", entity_id)
 
 
 def fetch_case_entities(case_id: str) -> list[dict[str, Any]]:

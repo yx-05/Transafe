@@ -77,7 +77,10 @@ def score_case_pair(
         weights.append(WEIGHT_SHARED_DOMAIN)
 
     # Signal 3 — narrative similarity: the recall engine, survives account rotation.
-    narrative_sim = _narrative_similarity(embedding_a, embedding_b)
+    narrative_sim = _narrative_similarity(
+        _coerce_embedding(embedding_a),
+        _coerce_embedding(embedding_b),
+    )
     if narrative_sim is not None and narrative_sim >= NARRATIVE_GATE_COSINE:
         narrative_weight = min(narrative_sim * MAX_NARRATIVE_WEIGHT, MAX_NARRATIVE_WEIGHT)
         signals["narrative"] = {"cosine": narrative_sim, "weight": round(narrative_weight, 4)}
@@ -143,6 +146,40 @@ def _coerce_fingerprint(value: Any) -> dict[str, Any]:
         if isinstance(parsed, dict):
             return parsed
     return {}
+
+
+def _coerce_embedding(value: Any) -> list[float] | None:
+    """Return an embedding as ``list[float]``, tolerating JSON-string storage.
+
+    ``case_mo.embedding`` comes back from PostgREST as a JSON *string*, not a
+    list. ``_narrative_similarity`` then compares two strings: ``len()`` is the
+    character count, the elementwise maths never runs, and the function returns
+    ``None`` — the narrative signal vanishes with no error and no log line, the
+    same failure shape as ``_safe`` swallowing a query into ``[]``. Mirrors
+    ``_coerce_fingerprint``.
+
+    Coercion makes the signal *evaluable*, not necessarily *useful*: with the
+    current seeded vectors every pair still lands far below the gate and is
+    recorded as ``below_gate`` evidence rather than silently omitted.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except (ValueError, TypeError):
+            return None
+    else:
+        parsed = value
+    if not isinstance(parsed, list | tuple):
+        return None
+    try:
+        return [float(v) for v in parsed]
+    except (TypeError, ValueError):
+        return None
 
 
 def _shared_identifier(

@@ -18,6 +18,28 @@ export interface OverviewMetric {
   unit: string;
   /** lower_is_better drives the bar direction on Screen A */
   lower_is_better: boolean;
+  /**
+   * The backend's own statement of what the two halves are measuring, rendered
+   * verbatim beside the bar. `null` when it did not supply one.
+   *
+   * Not decoration. `before`/`after` here are two cohorts of a campaign's own
+   * member cases — split on whether the case was ingested before its campaign
+   * existed — and *not* a "before TranSafe" industry baseline, which nothing in
+   * this system measures. Without this sentence on screen the honest number
+   * carries a dishonest frame.
+   */
+  basis: string | null;
+  /**
+   * How many cases each half's median was computed over. `null` when the
+   * backend did not say.
+   *
+   * Strength of claim, not decoration: two bars of equal length can rest on 2
+   * cases or on 40 and draw identically. The backend labels these diagnostics
+   * "so the number can be challenged" — dropping them makes the weak case
+   * indistinguishable from the strong one.
+   */
+  before_sample: number | null;
+  after_sample: number | null;
 }
 
 export interface OverviewResponse {

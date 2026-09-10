@@ -79,14 +79,18 @@ def embed_text(text: str) -> list[float]:
 
     try:
         import httpx
+        base_url = os.getenv(
+            "DASHSCOPE_BASE_URL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
         response = httpx.post(
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings",
+            f"{base_url}/embeddings",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
             json={
-                "model": "text-embedding-v3",
+                "model": os.getenv("DASHSCOPE_EMBEDDING_MODEL", "qwen3.7-text-embedding"),
                 "input": text,
                 "dimensions": 768,
                 "encoding_format": "float",

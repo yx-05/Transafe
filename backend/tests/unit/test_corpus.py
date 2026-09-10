@@ -32,7 +32,6 @@ from src.enterprise.corpus import (
 from src.enterprise.events import VALID_LAYERS, VALID_SEVERITIES
 from src.enterprise.linkage import LINK_THRESHOLD, score_case_pair
 
-
 #: Narrative order of the demo acts. Declared explicitly because the act labels
 #: do not sort into story order lexicographically (``III`` precedes ``II``).
 ACT_ORDER = ("I_sensing", "II_discovery", "III_validation", "IV_compile", "V_proof")

@@ -14,7 +14,7 @@
  * so the console is never dead on stage.
  */
 
-import { api } from "./api";
+import { api, markFixtureServed } from "./api";
 import { normaliseEvents } from "./adapters";
 import type { NsEvent } from "../types/events";
 import { mockReplaySequence } from "./mockData";
@@ -91,5 +91,13 @@ export async function loadReplaySequence(runId?: string): Promise<NsEvent[]> {
     }
   }
 
+  // Nothing recorded anywhere. The bundled corpus keeps the console alive on
+  // stage, but it is a *script*, not a recording of this system: it pulses
+  // every nerve node, proposes a campaign and publishes artifacts that were
+  // never compiled. A healthy backend with an empty `ns_events` table reaches
+  // this line without a single failed request, so the fixture flag has to be
+  // raised here — otherwise the most convincing animation in the console is
+  // also the only one with no evidence behind it and no badge above it.
+  markFixtureServed("/events → bundled replay corpus");
   return mockReplaySequence();
 }

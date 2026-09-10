@@ -80,7 +80,11 @@ def extract_mo_fingerprint(
     Args:
         case_id: UUID of the fraud case.
         transcript: List of utterance dicts with keys:
-            ``speaker``, ``utterance``, ``risk_score``, ``seq_idx``.
+            ``speaker``, ``utterance``, ``risk_score``, ``seq_idx``. Only
+            ``speaker`` and ``utterance`` are read. Every index this function
+            emits — ``evidence_utterances``, ``novel_phrases[].utterance_idx``
+            — is a **position in this list**, not the row's ``seq_idx``, so the
+            caller is responsible for loading the transcript in order.
 
     Returns:
         MO fingerprint dict matching the schema, or ``None`` on failure or on

@@ -1,10 +1,7 @@
 """Unit tests for Supabase & vector store database module."""
 
 from datetime import UTC, datetime
-from typing import Any
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from src.db.supabase import (
     fetch_case_context,
@@ -28,7 +25,6 @@ from src.db.vector_store import (
 
 def test_embed_text_returns_768_float_vector() -> None:
     """Assert embed_text returns a 768-dimensional float vector."""
-    import httpx
 
     mock_response = MagicMock()
     mock_response.json.return_value = {"data": [{"embedding": [0.1] * 768}]}

@@ -9,6 +9,7 @@ from src.enterprise.entity_resolver import (
     extract_domain_entity,
     fetch_case_entities,
     normalise_entity,
+    refresh_entity_stats,
     resolve_entities,
 )
 
@@ -126,6 +127,114 @@ def test_resolve_entities_skips_unknown_type(mock_client):
 def test_resolve_entities_supabase_down_returns_empty(mock_client):
     mock_client.side_effect = RuntimeError("down")
     assert resolve_entities("case-1", [{"entity_type": "PHONE", "value": "0112345678"}]) == []
+
+
+# ---------------------------------------------------------------------------
+# entities.case_count / last_seen — the console's graph reads these columns
+# ---------------------------------------------------------------------------
+def _split_table_client(link_rows):
+    """Supabase mock with a distinct table mock per table name.
+
+    The other tests here share one mock across every table, which cannot
+    distinguish a write to ``entities`` from a write to ``case_entity_links``.
+    """
+    entities_tbl = MagicMock()
+    entities_tbl.upsert.return_value.execute.return_value.data = [{"id": "entity-1"}]
+    links_tbl = MagicMock()
+    links_tbl.select.return_value.eq.return_value.execute.return_value.data = link_rows
+    tables = {"entities": entities_tbl, "case_entity_links": links_tbl}
+    client = MagicMock()
+    client.table.side_effect = lambda name: tables[name]
+    return client, entities_tbl, links_tbl
+
+
+@patch("src.enterprise.entity_resolver.get_supabase_client")
+def test_resolve_entities_refreshes_case_count_and_last_seen(mock_client):
+    """Linking a case must update the entity's case_count / last_seen.
+
+    Nothing else in v2 writes these columns, so if resolution skips them every
+    node in the console's entity graph reports case_count 0 forever.
+    """
+    client, entities_tbl, _ = _split_table_client(
+        [{"case_id": "case-1"}, {"case_id": "case-2"}, {"case_id": "case-3"}]
+    )
+    mock_client.return_value = client
+
+    resolve_entities("case-3", [{"entity_type": "PHONE", "value": "0112345678"}])
+
+    entities_tbl.update.assert_called_once()
+    patch_body = entities_tbl.update.call_args[0][0]
+    assert patch_body["case_count"] == 3
+    assert patch_body["last_seen"]
+    entities_tbl.update.return_value.eq.assert_called_once_with("id", "entity-1")
+
+
+@patch("src.enterprise.entity_resolver.get_supabase_client")
+def test_resolve_entities_case_count_is_derived_not_incremented(mock_client):
+    """Re-ingesting the same case must not inflate the counter.
+
+    The link table is keyed on (case_id, entity_id), so recomputing from it is
+    idempotent where a ``+1`` would not be.
+    """
+    client, entities_tbl, _ = _split_table_client([{"case_id": "case-1"}, {"case_id": "case-2"}])
+    mock_client.return_value = client
+
+    resolve_entities("case-2", [{"entity_type": "PHONE", "value": "0112345678"}])
+    resolve_entities("case-2", [{"entity_type": "PHONE", "value": "0112345678"}])
+
+    counts = [c.args[0]["case_count"] for c in entities_tbl.update.call_args_list]
+    assert counts == [2, 2]
+
+
+@patch("src.enterprise.entity_resolver.get_supabase_client")
+def test_resolve_entities_survives_a_stats_refresh_failure(mock_client):
+    """A stale counter must not discard an entity that was resolved and linked."""
+    client, entities_tbl, _ = _split_table_client([{"case_id": "case-1"}])
+    entities_tbl.update.side_effect = RuntimeError("column missing")
+    mock_client.return_value = client
+
+    result = resolve_entities("case-1", [{"entity_type": "PHONE", "value": "0112345678"}])
+    assert len(result) == 1
+    assert result[0]["value_norm"] == "+60112345678"
+
+
+def test_refresh_entity_stats_records_a_supplied_last_seen():
+    """The demo seed must be able to keep its own historical timestamps.
+
+    Its corpus is dated months back, and the live default of "now" would stamp
+    every seeded entity with the moment the seed ran — silently collapsing the
+    demo's timeline to a single instant while the counts beside it stayed
+    correct, which is the kind of wrong number nobody re-reads.
+    """
+    client, entities_tbl, _ = _split_table_client([{"case_id": "case-1"}])
+
+    refresh_entity_stats(client, "entity-1", last_seen="2026-08-02T09:15:00Z")
+
+    patch_body = entities_tbl.update.call_args[0][0]
+    assert patch_body["last_seen"] == "2026-08-02T09:15:00Z"
+    assert patch_body["case_count"] == 1
+
+
+def test_refresh_entity_stats_defaults_last_seen_to_now():
+    """Live ingest has no timestamp to pass: the case is arriving as this runs."""
+    client, entities_tbl, _ = _split_table_client([{"case_id": "case-1"}])
+
+    refresh_entity_stats(client, "entity-1")
+
+    assert entities_tbl.update.call_args[0][0]["last_seen"]
+
+
+def test_refresh_entity_stats_refuses_to_write_a_zero_count():
+    """A zero here means the link read failed or raced, not that nothing links.
+
+    Writing it would turn a transient read error into a permanently wrong
+    number on the graph, with no later run guaranteed to correct it.
+    """
+    client, entities_tbl, _ = _split_table_client([])
+
+    refresh_entity_stats(client, "entity-1")
+
+    entities_tbl.update.assert_not_called()
 
 
 @patch("src.enterprise.entity_resolver.get_supabase_client")

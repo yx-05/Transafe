@@ -7,9 +7,9 @@ bubble and the AUTO_TALK agent replies to the complete message.
 """
 
 import asyncio
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, patch
 
 from src.api.websocket_call import call_utterance_coalesce, queue_utterance_for_broadcast
 

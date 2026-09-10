@@ -45,6 +45,7 @@ from src.enterprise.corpus import (
     normalised_entities,
     transcript_text,
 )
+from src.enterprise.entity_resolver import refresh_entity_stats
 from src.enterprise.events import emit_event, get_broadcaster
 
 logger = logging.getLogger(__name__)
@@ -241,7 +242,26 @@ def _seed_entities(
         }
         for case_id, key in links
     ]
-    return written, _upsert(client, "case_entity_links", link_rows, warnings)
+    link_count = _upsert(client, "case_entity_links", link_rows, warnings)
+
+    # Reconcile each entity's case_count against the links that actually
+    # landed, using the same derivation the live resolver uses.
+    #
+    # The counts computed while building `entity_rows` are a Python-side
+    # prediction of this upsert. They agree with the link table only for as
+    # long as the upsert wholly succeeds: a partial write leaves an entity
+    # claiming "seen in 3 cases" with one edge on the graph, and the number a
+    # human reads off the demo would be one nothing in the database supports.
+    # Deriving it from `case_entity_links` also keeps the seed honest when the
+    # corpus gains a case, where a hand-maintained literal would quietly rot.
+    #
+    # `last_seen` is passed explicitly: the corpus is dated historically and
+    # the live default of "now" would rewrite the seeded timeline.
+    if link_count:
+        for row in payload:
+            refresh_entity_stats(client, row["id"], last_seen=row["last_seen"])
+
+    return written, link_count
 
 
 async def seed_demo_corpus(client: Any = None) -> dict[str, Any]:

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.services.stt import transcribe_audio_chunk
-from src.services.tavily import TARGET_DOMAINS, tavily_search
+from src.services.tavily import tavily_search
 from src.services.tts import (
     get_elevenlabs_api_keys,
     synthesize_agent_speech,

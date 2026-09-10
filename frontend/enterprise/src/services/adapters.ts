@@ -12,18 +12,27 @@
  * throw and never a fabricated number.
  */
 
-import type { OverviewMetric, OverviewResponse } from "../types/api";
+import type { ArtifactsResponse, OverviewMetric, OverviewResponse } from "../types/api";
 import type {
+  ArtifactDetail,
+  ArtifactEffectiveness,
+  ArtifactGroup,
+  ArtifactStatus,
+  ArtifactVersion,
+  CampaignDetail,
+  CampaignHypothesis,
   CampaignSummary,
   CaseDetail,
   CaseSummary,
   DiscoveryState,
   Entity,
   EntityType,
+  EvidenceItem,
   GraphData,
   GraphLink,
   GraphNode,
   MoFingerprint,
+  ProposedArtifact,
   TraceStep,
   TranscriptLine,
 } from "../types/campaign";
@@ -106,6 +115,15 @@ function normaliseMetric(value: unknown): OverviewMetric | null {
     after_value: num(m, ["after_value", "after"]),
     unit: str(m.unit),
     lower_is_better: m.lower_is_better !== false,
+    // Carried, not defaulted. The backend explains its own comparison or the
+    // bar goes unexplained — a fallback sentence written here would be the
+    // console inventing the meaning of someone else's measurement.
+    basis: strOrNull(m.basis),
+    // numOrNull, not num: a missing count must stay missing. `num`'s 0
+    // fallback would render "median over 0 cases", inventing a sample size
+    // and a very odd claim in place of silence.
+    before_sample: numOrNull(m, ["before_sample"]),
+    after_sample: numOrNull(m, ["after_sample"]),
   };
 }
 
@@ -327,6 +345,236 @@ export function normaliseCampaigns(data: unknown): { campaigns: CampaignSummary[
   const wire = dict(data);
   const raw = Array.isArray(data) ? data : arr(wire.campaigns ?? wire.items);
   return { campaigns: raw.map(normaliseCampaign) };
+}
+
+function normaliseEvidence(value: unknown): EvidenceItem[] {
+  return arr(value).map((item) => {
+    const e = dict(item);
+    return {
+      label: str(e.label ?? e.name, "—"),
+      value: str(e.value ?? e.detail),
+      // Only an explicit `true` passes. An absent verdict rendering as a green
+      // tick would be the console asserting a gate result nobody computed.
+      passed: e.passed === true,
+    };
+  });
+}
+
+function indicatorText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  const i = dict(value);
+  return str(i.value ?? i.indicator ?? i.text).trim();
+}
+
+/**
+ * Always an object, never null — Screen D seeds its edit form from
+ * `hypothesis.name`/`hypothesis.mo_summary` during render, so a missing
+ * container is a blank screen rather than a blank field.
+ */
+function normaliseHypothesis(value: unknown, fallbackName: string): CampaignHypothesis {
+  const h = dict(value);
+  return {
+    name: str(h.name, fallbackName),
+    mo_summary: str(h.mo_summary ?? h.summary ?? h.mo),
+    novel_indicators: arr(h.novel_indicators ?? h.indicators)
+      .map(indicatorText)
+      .filter((s) => s.length > 0),
+  };
+}
+
+function normaliseProposedArtifact(value: unknown): ProposedArtifact {
+  const a = dict(value);
+  return {
+    name: str(a.name, "—"),
+    // `tier` is dereferenced with `.toUpperCase()` on the badge.
+    tier: str(a.tier) === "core" ? "core" : "pack",
+    target_agent: str(a.target_agent ?? a.agent, "—"),
+    version: num(a, ["version"], 0),
+    note: strOrNull(a.note ?? a.artifact_type),
+    source_campaigns: arr(a.source_campaigns).filter(
+      (s): s is string => typeof s === "string",
+    ),
+  };
+}
+
+/**
+ * `/campaigns/{id}` → `CampaignDetail`.
+ *
+ * Screen D is the one screen where a human authorises something that compiles
+ * artifacts and propagates them to live workers. It read this payload raw:
+ * `confidence.toFixed(2)`, `evidence.map`, `hypothesis.name`,
+ * `proposed_artifacts.map` and `tier.toUpperCase()` are all unguarded, so any
+ * one missing key took the approval screen down to a white page instead of
+ * degrading. Every field below is total.
+ */
+export function normaliseCampaignDetail(data: unknown, id: string): CampaignDetail {
+  const wire = dict(data);
+  const core = Object.keys(dict(wire.campaign)).length > 0 ? dict(wire.campaign) : wire;
+  const summary = normaliseCampaign({ ...core, id: core.id ?? wire.id ?? id });
+  const miniGraph = wire.mini_graph ?? core.mini_graph;
+
+  return {
+    ...summary,
+    id: summary.id || id,
+    evidence: normaliseEvidence(wire.evidence ?? core.evidence),
+    hypothesis: normaliseHypothesis(wire.hypothesis ?? core.hypothesis, summary.name),
+    proposed_artifacts: arr(wire.proposed_artifacts ?? core.proposed_artifacts).map(
+      normaliseProposedArtifact,
+    ),
+    case_ids: arr(wire.case_ids ?? core.case_ids)
+      .map((v) => (typeof v === "string" ? v : String(v ?? "")))
+      .filter(Boolean),
+    mini_graph: miniGraph ? normaliseGraph(miniGraph) : null,
+  };
+}
+
+/* ── Artifacts ────────────────────────────────────────────────────────── */
+
+const ARTIFACT_STATUSES: ArtifactStatus[] = ["DRAFT", "PUBLISHED", "ROLLED_BACK"];
+
+function normaliseEffectiveness(value: unknown): ArtifactEffectiveness | null {
+  const e = dict(value);
+  // Absent measurement stays absent. Zeros here would render as "0/0 ✓",
+  // an effectiveness claim for an artifact the eval harness never scored.
+  if (Object.keys(e).length === 0) return null;
+  return {
+    eval_run_id: strOrNull(e.eval_run_id ?? e.run_id),
+    detected: num(e, ["detected"]),
+    total: num(e, ["total"]),
+    fp: num(e, ["fp", "false_positives"]),
+    fp_total: num(e, ["fp_total"]),
+    measured_at: strOrNull(e.measured_at),
+  };
+}
+
+function normaliseArtifactVersion(value: unknown): ArtifactVersion {
+  const v = dict(value);
+  const version = num(v, ["version"], 0);
+  const name = str(v.name);
+  const status = str(v.status, "PUBLISHED").toUpperCase();
+  return {
+    id: str(v.id, `${name}@${version}`),
+    name,
+    tier: str(v.tier) === "core" ? "core" : "pack",
+    artifact_type: str(v.artifact_type ?? v.type),
+    target_agent: str(v.target_agent ?? v.agent, "—"),
+    version,
+    status: ((ARTIFACT_STATUSES as readonly string[]).includes(status)
+      ? status
+      : "PUBLISHED") as ArtifactStatus,
+    created_at: str(v.created_at ?? v.ts),
+    created_by: str(v.created_by, "—"),
+    approved_by: strOrNull(v.approved_by),
+    // `.length` is read directly on both of these.
+    source_campaigns: arr(v.source_campaigns)
+      .map((s) => (typeof s === "string" ? s : str(dict(s).code ?? dict(s).id)))
+      .filter(Boolean),
+    campaign_id: strOrNull(v.campaign_id),
+    effectiveness: normaliseEffectiveness(v.effectiveness),
+  };
+}
+
+/**
+ * `/artifacts` → `{artifacts: ArtifactGroup[]}`.
+ *
+ * The backend returns a **flat** list — `registry.list_artifacts` collapses to
+ * the newest row per name and `router.list_artifacts` wraps it as
+ * `{artifacts:[...rows]}`. Screen E renders `group.versions.map(...)`, so a
+ * populated registry crashed the screen outright while an empty one looked
+ * fine, which is why this survived: the failure only appears once the system
+ * has actually published something. Grouping happens here so the component
+ * keeps its shape.
+ */
+export function normaliseArtifacts(data: unknown): ArtifactsResponse {
+  const wire = dict(data);
+  const raw = Array.isArray(data) ? data : arr(wire.artifacts ?? wire.items ?? wire.groups);
+
+  const byName = new Map<string, ArtifactGroup>();
+  const order: string[] = [];
+
+  function place(version: ArtifactVersion, hint?: Dict): void {
+    if (!version.name) return;
+    let group = byName.get(version.name);
+    if (!group) {
+      group = {
+        name: version.name,
+        tier: version.tier,
+        target_agent: version.target_agent,
+        latest_version: version.version,
+        versions: [],
+      };
+      byName.set(version.name, group);
+      order.push(version.name);
+    }
+    if (hint) {
+      const tier = str(hint.tier);
+      if (tier === "core" || tier === "pack") group.tier = tier;
+      const agent = str(hint.target_agent);
+      if (agent) group.target_agent = agent;
+    }
+    group.versions.push(version);
+  }
+
+  for (const entry of raw) {
+    const e = dict(entry);
+    if (Array.isArray(e.versions)) {
+      // Already grouped (the bundled fixture, and any future grouped wire).
+      for (const v of e.versions) {
+        place(
+          normaliseArtifactVersion({
+            name: e.name,
+            tier: e.tier,
+            target_agent: e.target_agent,
+            ...dict(v),
+          }),
+          e,
+        );
+      }
+      continue;
+    }
+    place(normaliseArtifactVersion(e));
+  }
+
+  const artifacts = order.map((name) => {
+    const group = byName.get(name) as ArtifactGroup;
+    group.versions.sort((a, b) => b.version - a.version);
+    group.latest_version = group.versions.reduce(
+      (max, v) => (v.version > max ? v.version : max),
+      0,
+    );
+    return group;
+  });
+
+  return { artifacts };
+}
+
+/**
+ * `/artifacts/{name}/{version}` → `ArtifactDetail`.
+ *
+ * The wire shape is `{current, previous, diff, versions}` (see
+ * `registry.get_artifact_diff`), not the flat record Screen E reads. The diff
+ * pane dereferences `detail.source_campaigns.length` and `detail.version`
+ * directly, so the envelope has to be unwrapped here.
+ */
+export function normaliseArtifactDetail(data: unknown, name: string): ArtifactDetail {
+  const wire = dict(data);
+  const current = Object.keys(dict(wire.current)).length > 0 ? dict(wire.current) : wire;
+  const previous = dict(wire.previous);
+  const hasPrevious = Object.keys(previous).length > 0;
+  const base = normaliseArtifactVersion({ name, ...current });
+
+  return {
+    ...base,
+    name: base.name || name,
+    content: str(current.content ?? wire.content),
+    previous_content: hasPrevious
+      ? str(previous.content)
+      : strOrNull(wire.previous_content),
+    previous_version:
+      numOrNull(previous, ["version"]) ??
+      numOrNull(wire, ["previous_version"]) ??
+      numOrNull(current, ["previous_version"]),
+  };
 }
 
 /* ── Graph ────────────────────────────────────────────────────────────── */

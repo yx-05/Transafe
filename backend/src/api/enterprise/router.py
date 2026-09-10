@@ -20,6 +20,7 @@ from src.api.enterprise import presenters
 from src.db.vector_store import get_supabase_client
 from src.enterprise import registry
 from src.enterprise.events import emit_event, fetch_recent_events
+from src.enterprise.ingest import notify_case_completed
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,16 @@ CLOSED_STATUSES = frozenset({"CLOSED", "RESOLVED", "DISMISSED", "ARCHIVED"})
 
 #: Campaign states a human may still approve.
 APPROVABLE_STATUSES = ("CANDIDATE", "PENDING_VALIDATION")
+
+#: Campaign states a human may still edit.
+#:
+#: Deliberately excludes APPROVED/ACTIVE. Approval compiles the hypothesis into
+#: artifacts and propagates them to workers, so a later edit would leave the
+#: propagated artifact describing one thing and the campaign text a human signed
+#: off describing another — with nothing on either record to show they had ever
+#: diverged. The edit is refused instead; correcting an approved campaign is a
+#: new version, not a rewrite of the approved one.
+EDITABLE_STATUSES = ("CANDIDATE", "PENDING_VALIDATION")
 
 #: Campaign states a human may still reject — deliberately the same gate as
 #: approval. A decision that has already been recorded (APPROVED / ACTIVE /
@@ -120,16 +131,21 @@ async def get_overview() -> dict[str, Any]:
     """Nervous-system overview: layer counters, live campaigns and recent events.
 
     Returns:
-        Dict with ``layers``, ``campaigns``, ``recent_events`` and ``generated_at``.
+        Dict with ``layers``, ``metrics``, ``campaigns``, ``recent_events`` and
+        ``generated_at``.
     """
 
     def _query() -> dict[str, Any]:
         client = get_supabase_client()
         cutoff_24h = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
 
+        # `status` is read below for the open-case counter. It has to be named
+        # here: PostgREST returns only the selected columns, so omitting it
+        # made every case look status-less and therefore open, and
+        # `layers.case.open` silently equalled `layers.case.cases` forever.
         cases = _safe(
             lambda: _rows(
-                client.table("fraud_cases").select("id, risk_tier, created_at").execute()
+                client.table("fraud_cases").select("id, risk_tier, status, created_at").execute()
             ),
             [],
         )
@@ -161,6 +177,14 @@ async def get_overview() -> dict[str, Any]:
             ),
             [],
         )
+        memberships = _safe(
+            lambda: _rows(
+                client.table("campaign_cases")
+                .select("campaign_id, case_id, joined_at")
+                .execute()
+            ),
+            [],
+        )
 
         cases_24h = [c for c in cases if str(c.get("created_at") or "") >= cutoff_24h]
         active_campaigns = [c for c in campaigns if c.get("status") in ("APPROVED", "ACTIVE")]
@@ -169,6 +193,17 @@ async def get_overview() -> dict[str, Any]:
         core_version = max(
             (int(a.get("version") or 0) for a in artifacts if a.get("tier") == "core"),
             default=0,
+        )
+
+        # Screen A's MetricBar. `metrics` is a list precisely so that a metric
+        # nobody can measure yet is *absent* rather than zero — the panel's
+        # "no metrics yet" empty state is an honest report, a bar reading 0 is
+        # not. Only campaigns in the window fetched above are measurable, which
+        # is why the campaign list is read before this runs.
+        metric = presenters.time_to_discovery_metric(
+            {str(c["id"]): c.get("created_at") for c in campaigns if c.get("id")},
+            memberships,
+            {str(c["id"]): c.get("created_at") for c in cases if c.get("id")},
         )
 
         # The console's counter strip (adapters.normaliseOverview) reads
@@ -204,6 +239,7 @@ async def get_overview() -> dict[str, Any]:
                     "core_version": core_version,
                 },
             },
+            "metrics": [metric] if metric else [],
             "campaigns": campaigns,
         }
 
@@ -405,12 +441,20 @@ async def get_case_detail(case_id: str) -> dict[str, Any]:
             "extracted_at": mo_row.get("extracted_at") if isinstance(mo_row, dict) else None,
         }
 
+        # Must use the SAME order as src.enterprise.ingest.load_case_transcript.
+        # `fingerprint.novel_phrases[].utterance_idx` and `evidence_utterances`
+        # are positions in the list the extractor was handed, and
+        # presenters.transcript_lines re-derives those positions by enumerating
+        # these rows. If the two reads disagree — which ordering on `created_at`
+        # alone permits, since it is not a total order — every highlight lands
+        # on the wrong line. `id` is the tie-break that keeps them identical.
         transcript_rows = _safe(
             lambda: _rows(
                 client.table("call_transcripts")
                 .select("*")
                 .eq("case_id", case_id)
                 .order("created_at")
+                .order("id")
                 .execute()
             ),
             [],
@@ -803,14 +847,15 @@ async def run_discovery() -> dict[str, Any]:
 async def ingest_case(case_id: str) -> dict[str, Any]:
     """Run the full v2 ingest pipeline for a completed v1 case.
 
-    This is the **v1 → v2 bridge**. v1 stays untouched: instead of v1 calling
-    into v2, anything that finishes a case (the call pipeline, a backfill
-    script, the demo runner) POSTs the case id here. The pipeline runs as a
-    background task, so the caller returns immediately and the live path pays
-    no latency.
+    A manual/backfill entry point onto the same bridge the live call path uses.
+    The pipeline itself lives in :mod:`src.enterprise.ingest` so that v1 can
+    hand a case over by calling :func:`~src.enterprise.ingest.notify_case_completed`
+    in-process, without importing the v2 HTTP layer or paying an HTTP round
+    trip; this endpoint exists for replays, backfills and the demo runner.
 
     Pipeline: MO extraction → entity resolution → discovery (OBSERVED check,
-    candidate scoring, debounced re-clustering).
+    candidate scoring, debounced re-clustering). It runs as a background task,
+    so the caller returns immediately.
 
     Args:
         case_id: UUID of the completed fraud case.
@@ -818,72 +863,8 @@ async def ingest_case(case_id: str) -> dict[str, Any]:
     Returns:
         Dict with ``status`` and ``case_id``.
     """
-    asyncio.create_task(_run_ingest_pipeline(case_id))
+    notify_case_completed(case_id)
     return {"status": "accepted", "case_id": case_id}
-
-
-async def _run_ingest_pipeline(case_id: str) -> None:
-    """Background v2 ingest pipeline for one case. Never raises."""
-    from src.enterprise.discovery import get_discovery_engine
-    from src.enterprise.entity_resolver import entities_from_identifiers, resolve_entities
-    from src.enterprise.mo_extractor import run_mo_extraction
-
-    try:
-        await emit_event(layer="case", event_type="case_ingested", payload={"case_id": case_id})
-
-        transcript = await asyncio.to_thread(_load_transcript, case_id)
-        if not transcript:
-            logger.info("v2 ingest: case %s has no transcript — skipping MO extraction", case_id)
-            return
-
-        mo = await asyncio.to_thread(run_mo_extraction, case_id, transcript)
-        if mo:
-            await emit_event(
-                layer="case",
-                event_type="mo_extracted",
-                payload={"case_id": case_id, "extractor": mo.get("extractor", "llm-v1")},
-            )
-            raw_entities = entities_from_identifiers(mo.get("identifiers", {}))
-            resolved = await asyncio.to_thread(resolve_entities, case_id, raw_entities)
-            if resolved:
-                await emit_event(
-                    layer="case",
-                    event_type="entity_linked",
-                    payload={
-                        "case_id": case_id,
-                        "entities": [
-                            {"type": e["entity_type"], "value": e["value_norm"]} for e in resolved
-                        ],
-                    },
-                )
-
-        await get_discovery_engine().on_case_ingested(case_id)
-    except Exception:
-        logger.exception("v2 ingest pipeline failed for case %s", case_id)
-
-
-def _load_transcript(case_id: str) -> list[dict[str, Any]]:
-    """Load a case's utterances from ``call_transcripts`` (ordered)."""
-    client = get_supabase_client()
-    rows = _safe(
-        lambda: _rows(
-            client.table("call_transcripts")
-            .select("*")
-            .eq("case_id", case_id)
-            .order("created_at")
-            .execute()
-        ),
-        [],
-    )
-    return [
-        {
-            "speaker": r.get("speaker", "UNKNOWN"),
-            "utterance": r.get("utterance") or r.get("text") or "",
-            "risk_score": r.get("risk_score", 0),
-            "seq_idx": r.get("seq_idx", i),
-        }
-        for i, r in enumerate(rows)
-    ]
 
 
 @router.get("/events")
@@ -1355,7 +1336,16 @@ async def get_campaign_detail(campaign_id: str) -> dict[str, Any]:
         artifact_rows = _safe(
             lambda: _rows(
                 client.table("artifacts")
-                .select("name, tier, target_agent, version, artifact_type, campaign_id")
+                # `source_campaigns` is named here because presenters.
+                # proposed_artifact reads it. Omitting it did not fail: the read
+                # returned None and the presenter emitted [], so every artifact
+                # on Screen D showed no provenance at all — and a core rule
+                # generalised from three campaigns is precisely the artifact
+                # whose provenance an approver needs to see.
+                .select(
+                    "name, tier, target_agent, version, artifact_type, "
+                    "campaign_id, source_campaigns"
+                )
                 .eq("campaign_id", campaign_id)
                 .order("version", desc=True)
                 .execute()
@@ -1557,6 +1547,146 @@ async def reject_campaign(campaign_id: str, body: RejectRequest) -> dict[str, An
     )
 
     return {"status": "rejected", "campaign": campaign, "reject_reason": body.reason}
+
+
+class CampaignEditRequest(BaseModel):
+    """Body of ``PATCH /enterprise/campaigns/{id}``.
+
+    The console (``api.editCampaign``) sends only the fields the analyst
+    touched — today ``{name, mo_summary}`` from Screen D's edit form — so every
+    field is optional. A body that sets none of them is a 422 rather than a
+    silent 200: "saved" is the one thing this endpoint must never report when
+    it wrote nothing.
+
+    ``extra="forbid"`` for the same reason. Pydantic's default is to drop
+    unrecognised keys, so a console sending a field this endpoint cannot store
+    would be answered ``200`` with that field quietly discarded — the edit
+    would look saved and be gone on the next refetch.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(None, description="Analyst's corrected campaign name")
+    mo_summary: str | None = Field(None, description="Analyst's corrected MO hypothesis")
+    indicators: list[Any] | None = Field(None, description="Replacement indicator list")
+    edited_by: str = Field("fraud_ops", description="Human making the edit")
+
+    @field_validator("name")
+    @classmethod
+    def _name_must_not_be_blank(cls, value: str | None) -> str | None:
+        """Refuse a whitespace-only name and store the trimmed text.
+
+        ``name`` is the campaign's identity on every screen and in the
+        artifacts compiled from it; blanking it would leave the row displayed
+        as its bare code with no way to tell that a human had erased it.
+        """
+        if value is None:
+            return None
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("name must not be empty")
+        return trimmed
+
+    def changes(self) -> dict[str, Any]:
+        """Return only the columns this request actually sets.
+
+        ``mo_summary`` may legitimately be set to an empty string — an analyst
+        deleting a hypothesis they do not believe is a real edit — so emptiness
+        is not used to mean "unset". Absence is.
+        """
+        patch: dict[str, Any] = {}
+        if self.name is not None:
+            patch["name"] = self.name
+        if self.mo_summary is not None:
+            patch["mo_summary"] = self.mo_summary.strip()
+        if self.indicators is not None:
+            patch["indicators"] = self.indicators
+        return patch
+
+
+@router.patch("/campaigns/{campaign_id}")
+async def edit_campaign(campaign_id: str, body: CampaignEditRequest) -> dict[str, Any]:
+    """Record a human's corrections to a campaign hypothesis, before approval.
+
+    Screen D lets an analyst rewrite a machine-generated name and MO summary.
+    This is the third door in the governance gate alongside approve and reject,
+    and it is the one that has to stay shut *after* a decision: approval
+    compiles the hypothesis into artifacts and propagates them to workers, so
+    an edit accepted afterwards would silently decouple what was propagated
+    from the text a human signed off. ``EDITABLE_STATUSES`` is therefore
+    checked against the freshly loaded row, not against anything the client
+    sends.
+
+    The response is the full ``CampaignDetail`` produced by
+    :func:`get_campaign_detail`, re-read after the write. The console replaces
+    its cached campaign with whatever comes back, so this deliberately returns
+    stored state rather than echoing the request — an echo would render
+    identically whether or not the update landed.
+
+    Args:
+        campaign_id: Campaign UUID.
+        body: ``{name?, mo_summary?, indicators?, edited_by}``.
+
+    Returns:
+        The updated ``CampaignDetail``.
+
+    Raises:
+        HTTPException: 404 when the campaign is unknown, 409 when its status is
+            not editable, 422 when the body changes nothing or blanks the name,
+            503 when the edit cannot be persisted.
+    """
+    campaign = await asyncio.to_thread(_load_campaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
+
+    current_status = str(campaign.get("status", ""))
+    if current_status not in EDITABLE_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Campaign {campaign_id} is {current_status or 'UNKNOWN'}; "
+                "its hypothesis has already been compiled and propagated and is "
+                "no longer editable"
+            ),
+        )
+
+    patch = body.changes()
+    if not patch:
+        raise HTTPException(
+            status_code=422,
+            detail="No editable fields supplied (name, mo_summary, indicators)",
+        )
+
+    def _update() -> bool:
+        try:
+            get_supabase_client().table("campaigns").update(patch).eq(
+                "id", campaign_id
+            ).execute()
+            return True
+        except Exception:
+            logger.exception("enterprise API: failed to edit campaign %s", campaign_id)
+            return False
+
+    if not await asyncio.to_thread(_update):
+        raise HTTPException(status_code=503, detail="Could not persist campaign edit")
+
+    # The console does not poll — without this event Screen D keeps showing the
+    # pre-edit hypothesis to every other connected client. `fields` names what
+    # changed so the ticker line is specific; the corrected text itself is
+    # fetched, not pushed.
+    await emit_event(
+        layer="discovery",
+        event_type="campaign_edited",
+        payload={
+            "campaign_id": campaign_id,
+            "code": campaign.get("code"),
+            "status": current_status,
+            "fields": sorted(patch),
+            "edited_by": body.edited_by,
+        },
+    )
+
+    return await get_campaign_detail(campaign_id)
 
 
 async def _run_approval_pipeline(

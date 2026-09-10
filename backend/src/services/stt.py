@@ -135,7 +135,10 @@ async def transcribe_audio_chunk_dashscope(
             from openai import AsyncOpenAI
             client = AsyncOpenAI(
                 api_key=api_key,
-                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                base_url=os.getenv(
+                    "DASHSCOPE_BASE_URL",
+                    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                ),
             )
             audio_file = (filename, audio_bytes)
             transcription = await client.audio.transcriptions.create(

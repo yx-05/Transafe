@@ -36,6 +36,20 @@ export const mockOverview = (): OverviewResponse => ({
     core_version: 7,
     exposure_rm: 284500,
   },
+  // Exactly one metric, because the live backend produces exactly one:
+  // `presenters.time_to_discovery_metric`, and even that is omitted when
+  // either cohort is empty. Fixture mode is a preview of live mode's shape,
+  // so three bars here would misrepresent the product no matter how honestly
+  // each one were captioned.
+  //
+  // `VICTIMS BEFORE DISCOVERY` and `TIME TO PROPAGATION` were removed rather
+  // than labelled. Other fixtures in this file invent *values* for data the
+  // system really produces; those two invented a *capability* — nothing
+  // counts victims, nothing times propagation — which is a roadmap drawn as
+  // a product. Do not reinstate either without a measurement behind it.
+  //
+  // Sample counts are omitted deliberately: no cases were counted to produce
+  // these numbers, so the bars render without an `n=`.
   metrics: [
     {
       label: "TIME TO DISCOVERY",
@@ -43,20 +57,9 @@ export const mockOverview = (): OverviewResponse => ({
       after_value: 41,
       unit: "min",
       lower_is_better: true,
-    },
-    {
-      label: "VICTIMS BEFORE DISCOVERY",
-      before_value: 24,
-      after_value: 3,
-      unit: "victims",
-      lower_is_better: true,
-    },
-    {
-      label: "TIME TO PROPAGATION",
-      before_value: 604800,
-      after_value: 1,
-      unit: "s",
-      lower_is_better: true,
+      basis: "illustrative fixture — not measured from this database",
+      before_sample: null,
+      after_sample: null,
     },
   ],
   mode: "LIVE",
@@ -287,7 +290,13 @@ export const mockCampaignDetail = (id: string): CampaignDetail => ({
       tier: "core",
       target_agent: "phone_agent",
       version: 7,
-      note: "generalised from 019 · 024 · 027",
+      // Live, `note` resolves to the backend's `artifact_type` — there is no
+      // prose note column. This read "generalised from 019 · 024 · 027",
+      // which made fixture mode look like it displayed provenance while the
+      // live path displayed none: `source_campaigns` was never rendered. The
+      // provenance now renders from the array below, so this field goes back
+      // to the value the backend actually sends. Do not put prose here.
+      note: "phone_agent_core",
       source_campaigns: ["SCAM-019", "SCAM-024", "SCAM-027"],
     },
     {

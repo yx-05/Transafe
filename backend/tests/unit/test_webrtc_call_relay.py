@@ -1,6 +1,5 @@
 """Unit test suite validating 2-way WebRTC call relaying, incoming call controls, and event broadcasting."""
 
-import pytest
 from fastapi.testclient import TestClient
 
 from main import app

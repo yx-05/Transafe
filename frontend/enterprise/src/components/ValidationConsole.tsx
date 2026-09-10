@@ -32,6 +32,10 @@ export function ValidationConsole({
   const [summary, setSummary] = useState(campaign.hypothesis.mo_summary);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
+  // A failed save used to close the editor exactly like a successful one, so
+  // an edit that never reached the server looked committed.
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const decided = campaign.status !== "CANDIDATE" && campaign.status !== "PENDING_VALIDATION";
 
@@ -108,17 +112,36 @@ export function ValidationConsole({
                   <button
                     type="button"
                     className="btn btn-primary"
+                    disabled={saving}
                     onClick={() => {
-                      void onEdit?.(campaign.id, { name, mo_summary: summary });
-                      setEditing(false);
+                      setSaveError(null);
+                      setSaving(true);
+                      void Promise.resolve(
+                        onEdit?.(campaign.id, { name, mo_summary: summary }),
+                      )
+                        .then(() => {
+                          setEditing(false);
+                        })
+                        .catch((err: unknown) => {
+                          setSaveError(
+                            err instanceof Error ? err.message : String(err),
+                          );
+                        })
+                        .finally(() => setSaving(false));
                     }}
                   >
-                    SAVE EDITS
+                    {saving ? "SAVING…" : "SAVE EDITS"}
                   </button>
                   <button type="button" className="btn" onClick={() => setEditing(false)}>
                     CANCEL
                   </button>
                 </div>
+                {saveError && (
+                  <p className="redacted mono" data-testid="edit-error" style={{ fontSize: 11 }}>
+                    ✕ not saved — {saveError}. The hypothesis below is still the
+                    stored one.
+                  </p>
+                )}
               </div>
             ) : (
               <>
@@ -152,6 +175,14 @@ export function ValidationConsole({
                       <span className="muted">v{a.version}</span>
                       <span className="muted">→ {a.target_agent}</span>
                       {a.note && <span className="muted">↳ {a.note}</span>}
+                      {a.source_campaigns && a.source_campaigns.length > 0 && (
+                        <span
+                          className="muted"
+                          data-testid={`artifact-sources-${a.name}`}
+                        >
+                          generalised from {a.source_campaigns.join(" · ")}
+                        </span>
+                      )}
                       {onViewDiff && (
                         <button
                           type="button"

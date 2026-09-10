@@ -124,6 +124,15 @@ button {
   color: var(--amber);
 }
 
+/* Fabricated data was rendered. Deliberately the loudest thing in the header:
+   a fixture that looks like real data is this console's worst failure mode. */
+.mode-badge.fixture {
+  border-color: var(--red);
+  background: rgba(229, 57, 53, 0.12);
+  color: var(--red);
+  font-weight: 600;
+}
+
 .mode-dot {
   width: 7px;
   height: 7px;
@@ -399,6 +408,17 @@ button {
   margin-bottom: 6px;
 }
 
+/* Qualifies what the before/after cohorts are. Dim, but never hidden behind a
+   hover — the frame has to be legible in a screenshot to do its job. */
+.metric-basis {
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-faint);
+  margin: -2px 0 8px;
+  max-width: 68ch;
+}
+
 .metric-row {
   display: grid;
   grid-template-columns: 58px 1fr 190px;
@@ -453,6 +473,14 @@ button {
 .metric-row .value b {
   color: var(--text);
   font-weight: 500;
+}
+
+/* Sample size behind the median. Subordinate to the value, but on the same
+   line and in the same screenshot — a bar over 2 cases must not read like a
+   bar over 40. */
+.metric-row .value .sample {
+  color: var(--text-faint);
+  font-size: 10px;
 }
 
 /* ── Case detail ──────────────────────────────────────────────────────── */

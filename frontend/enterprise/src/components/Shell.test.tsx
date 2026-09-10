@@ -6,6 +6,7 @@ import Shell from "./Shell";
 import { MockWebSocket, resetEventStore } from "../test-utils";
 import { useEventStore } from "../store/useEventStore";
 import { useCampaignStore } from "../store/useCampaignStore";
+import { api, __resetFixtureState } from "../services/api";
 
 const originalWs = globalThis.WebSocket;
 
@@ -25,6 +26,7 @@ function renderShell(initial = "/") {
 describe("Shell", () => {
   beforeEach(() => {
     resetEventStore();
+    __resetFixtureState();
     useCampaignStore.setState({ overview: null });
     MockWebSocket.reset();
     (globalThis as any).WebSocket = MockWebSocket;
@@ -117,5 +119,68 @@ describe("Shell", () => {
   it("renders the routed screen body", () => {
     renderShell("/graph");
     expect(screen.getByText("graph body")).toBeInTheDocument();
+  });
+
+  it("raises the FIXTURE badge for a fallback on a screen that never touches the overview", async () => {
+    // Backend is up and /overview answers normally, so the shell's own data is
+    // real and nothing about it ever changes again. Screen E then falls back
+    // to fabricated artifacts. Sampling `lastFixtureRoute()` from an effect
+    // keyed on `overview` cannot see this: fabricated rows render under a
+    // clean header, which is exactly the failure this console keeps shipping.
+    // Everything the shell itself needs is served for real, so the header has
+    // no reason of its own to raise the badge. Only /artifacts falls back.
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/artifacts")) throw new Error("offline");
+      return {
+        ok: true,
+        status: 200,
+        json: async () => (url.includes("/events") ? [] : {}),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    function RegistryBody() {
+      return (
+        <button type="button" onClick={() => void api.getArtifacts()}>
+          load artifacts
+        </button>
+      );
+    }
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/registry"]}>
+        <Routes>
+          <Route element={<Shell />}>
+            <Route path="registry" element={<RegistryBody />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // Let the shell fully settle first. Its overview is real and will not
+    // change again — which is the whole problem: an effect keyed on `overview`
+    // has already fired for the last time before the operator ever reaches
+    // this screen.
+    await waitFor(() => expect(useCampaignStore.getState().overview).not.toBeNull());
+    expect(screen.queryByTestId("fixture-badge")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "load artifacts" }));
+
+    const badge = await screen.findByTestId("fixture-badge");
+    expect(badge).toHaveAttribute("title", expect.stringContaining("/artifacts"));
+  });
+
+  it("shows no FIXTURE badge while every request is served by the backend", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+    })) as unknown as typeof fetch;
+
+    renderShell();
+
+    await waitFor(() => expect(useCampaignStore.getState().overview).not.toBeNull());
+    expect(screen.queryByTestId("fixture-badge")).not.toBeInTheDocument();
   });
 });

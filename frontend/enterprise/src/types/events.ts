@@ -57,6 +57,7 @@ export const EVENT_GLYPHS: Record<string, string> = {
   campaign_proposed: "🔴",
   campaign_approved: "✅",
   campaign_rejected: "⛔",
+  campaign_edited: "✎",
   artifact_compiled: "📦",
   artifact_published: "📦",
   artifact_rolled_back: "↩",

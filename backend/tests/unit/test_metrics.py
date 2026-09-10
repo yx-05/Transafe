@@ -141,7 +141,7 @@ def test_compute_adaptation_metrics_flags_target() -> None:
     m = compute_adaptation_metrics(pre, post, GROUND_TRUTH)
 
     assert m["delta"] == 0.25
-    assert m["meets_target"] is (0.25 >= TARGET_ADAPTATION_DELTA)
+    assert m["meets_target"] is (TARGET_ADAPTATION_DELTA <= 0.25)
 
 
 def test_compute_adaptation_metrics_reports_fp_regression() -> None:
