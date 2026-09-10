@@ -775,7 +775,7 @@ const MCP_LOG_ROWS: McpLogRow[] = [
   {
     id: 3,
     ts: "2026-09-10T12:05:31Z",
-    caller: "codebuddy",
+    caller: "workbuddy",
     role: "compliance",
     tool: "get_campaign",
     params: { code: "SCAM-027" },
@@ -785,7 +785,7 @@ const MCP_LOG_ROWS: McpLogRow[] = [
   {
     id: 2,
     ts: "2026-09-10T12:05:14Z",
-    caller: "codebuddy",
+    caller: "workbuddy",
     role: "legal",
     tool: "ask_transafe",
     params: { question: "What is the exposure for SCAM-027?" },
@@ -930,13 +930,13 @@ export const mockReplaySequence = (): NsEvent[] => {
     e(12.5, "propagation", "propagated", "info", { agent: "phishing_agent" }),
     e(12.7, "propagation", "propagated", "info", { agent: "txn_monitor" }),
     e(18.0, "exposure", "mcp_call", "info", {
-      caller: "codebuddy",
+      caller: "workbuddy",
       tool: "ask_transafe",
       role: "legal",
       latency_ms: 340,
     }),
     e(20.5, "exposure", "mcp_call", "info", {
-      caller: "codebuddy",
+      caller: "workbuddy",
       tool: "get_campaign",
       role: "compliance",
       latency_ms: 88,

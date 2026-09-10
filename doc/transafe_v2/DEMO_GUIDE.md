@@ -418,8 +418,8 @@ Merge the `transafe` entry into the **existing** `mcpServers` object — do not 
 {
   "mcpServers": {
     "transafe": {
-      "command": "uv",
-      "args": ["run", "python", "-m", "mcp.server"],
+      "command": "/Users/Admin/Documents/GitHub/Transafe/backend/.venv/bin/python",
+      "args": ["-m", "mcp.server"],
       "cwd": "/Users/Admin/Documents/GitHub/Transafe/backend",
       "env": {
         "TRANSAFE_CALLER": "workbuddy",
@@ -433,10 +433,18 @@ Merge the `transafe` entry into the **existing** `mcpServers` object — do not 
 
 Key settings:
 - **`TRANSAFE_ROLE: "compliance"`** — this is the entitlement ceiling. WorkBuddy can request a narrower role per-call, but never a broader one. Launching with `compliance` and asking for `fraud_ops` gets you `compliance`.
-- **`cwd`** — must point to your backend directory (where `uv` can find the project).
+- **`cwd`** — must point to your backend directory.
 - **`TRANSAFE_CALLER: "workbuddy"`** — stamps every audit log entry so you can trace who called what. This is the value that appears in the console's `caller` column.
 
 No `transport` key is needed — `command` implies stdio.
+
+> **Why the absolute path to `.venv/bin/python`, and not just `uv`.**
+>
+> WorkBuddy is a GUI app, and a GUI-launched process does **not** inherit your shell's `PATH`. On this machine it gets roughly `/usr/bin:/bin:/usr/sbin:/sbin` — and `uv` lives at `/Users/Admin/.local/bin/uv`, which is not on it. A `"command": "uv"` config fails with `uv: No such file or directory`, and in the UI that surfaces as the server simply not starting, with no useful error.
+>
+> Pointing at the venv interpreter avoids the problem entirely and is also **faster and offline-safe**: `uv run` re-resolves the project on every launch, which adds startup latency and can reach for the network. Calling the venv's `python` directly does neither.
+>
+> If you would rather keep `uv`, use its absolute path — `"command": "/Users/Admin/.local/bin/uv"` — which was verified to work under a stripped-down GUI environment.
 
 **Credentials are not needed here.** The server loads `backend/.env` itself on startup, so `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` do not belong in this file. Only the `TRANSAFE_*` keys go in, because they describe *how this client is being launched*, not what the server needs to run.
 

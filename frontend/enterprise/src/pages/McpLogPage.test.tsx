@@ -28,7 +28,7 @@ function response(asRole?: string): McpLogResponse {
       {
         id: 1,
         ts: "2026-09-10T12:05:31Z",
-        caller: "codebuddy",
+        caller: "workbuddy",
         role: "compliance",
         tool: "get_campaign",
         params: asRole === "public" ? { outcome: null } : { code: "SCAM-027" },
@@ -141,7 +141,7 @@ describe("McpLogPage", () => {
     // `mcp_call` events 47-95 on the live instance carry no such key. A
     // falsy-check instead of `=== false` would make the console retroactively
     // report every one of them as a lost audit row.
-    act(() => seedEvents([mcpCall({ caller: "codebuddy", outcome: "ok" })]));
+    act(() => seedEvents([mcpCall({ caller: "workbuddy", outcome: "ok" })]));
 
     await waitFor(() => expect(getMcpLog).toHaveBeenCalledTimes(2));
     expect(screen.queryByTestId("audit-gap-warning")).not.toBeInTheDocument();

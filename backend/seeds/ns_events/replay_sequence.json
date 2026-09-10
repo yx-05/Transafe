@@ -362,7 +362,7 @@
     "severity": "info",
     "payload": {
       "act": "V_proof",
-      "caller": "codebuddy",
+      "caller": "workbuddy",
       "tool": "ask_transafe",
       "role": "legal",
       "latency_ms": 340

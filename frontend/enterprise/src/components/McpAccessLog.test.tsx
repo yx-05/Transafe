@@ -30,7 +30,7 @@ function row(over: Partial<McpLogRow> = {}): McpLogRow {
   return {
     id: 1,
     ts: "2026-09-10T12:05:31Z",
-    caller: "codebuddy",
+    caller: "workbuddy",
     role: "compliance",
     tool: "get_campaign",
     params: { code: "SCAM-027" },

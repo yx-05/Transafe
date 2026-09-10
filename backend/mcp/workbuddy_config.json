@@ -14,6 +14,11 @@
     "",
     "Replace <ABS_PATH> with the absolute path to this repository's backend/ directory.",
     "",
+    "Use the venv interpreter above, NOT a bare 'uv': WorkBuddy is a GUI app and does",
+    "not inherit your shell PATH, so 'uv' (usually in ~/.local/bin) is not resolvable",
+    "and the server fails to launch with no useful error in the UI. The venv path is",
+    "also faster and offline-safe, since it skips uv's per-launch project resolution.",
+    "",
     "TRANSAFE_ROLE is the process-level entitlement CEILING. A tools/call argument may",
     "name a NARROWER role (useful for previewing redaction), but never a broader one.",
     "Launching with 'public' and asking for 'fraud_ops' gets you 'public'.",
@@ -21,41 +26,30 @@
     "Valid roles: fraud_ops, compliance, customer_service, legal, auditor, analyst,",
     "partner_bank, external_researcher, public. Anything else is treated as public.",
     "",
+    "Do NOT add SUPABASE_URL / SUPABASE_SERVICE_KEY here. The server loads",
+    "backend/.env itself. A placeholder like '${SUPABASE_URL}' expands to the empty",
+    "string when the GUI environment does not define it, and an env var passed by the",
+    "client WINS over .env - so the server would start with a blank Supabase URL and",
+    "fail on the first query while still reporting a healthy connection.",
+    "",
+    "This file is the repo's reference copy. The block to paste into WorkBuddy is",
+    "just the 'mcpServers' object below; drop the $comment key, which is for readers",
+    "of this repository and is not part of WorkBuddy's schema.",
+    "",
     "Every call — success, denial, rate limit, error — is written to mcp_access_log and",
     "emitted as an exposure/mcp_call ns_event, visible live on console Screen G."
   ],
   "mcpServers": {
     "transafe": {
-      "command": "uv",
-      "args": ["run", "python", "-m", "mcp.server"],
-      "cwd": "<ABS_PATH>/backend",
+      "command": "/Users/Admin/Documents/GitHub/Transafe/backend/.venv/bin/python",
+      "args": ["-m", "mcp.server"],
+      "cwd": "/Users/Admin/Documents/GitHub/Transafe/backend",
       "env": {
         "TRANSAFE_CALLER": "workbuddy",
-        "TRANSAFE_ROLE": "fraud_ops",
-        "TRANSAFE_LOG_LEVEL": "INFO",
-        "SUPABASE_URL": "${SUPABASE_URL}",
-        "SUPABASE_SERVICE_KEY": "${SUPABASE_SERVICE_KEY}",
-        "DEEPSEEK_API_KEY": "${DEEPSEEK_API_KEY}"
+        "TRANSAFE_ROLE": "compliance",
+        "TRANSAFE_LOG_LEVEL": "INFO"
       },
-      "transport": "stdio",
-      "description": "TranSafe fraud intelligence — role-redacted campaigns, cases, indicators and defense artifacts.",
-      "tools": [
-        "ask_transafe",
-        "list_active_campaigns",
-        "get_campaign",
-        "get_case_evidence",
-        "get_artifact",
-        "check_indicator",
-        "query_stats",
-        "query_mcp_log"
-      ],
-      "toolAliases": {
-        "query_campaign": "get_campaign",
-        "query_case": "get_case_evidence",
-        "query_artifact": "get_artifact",
-        "query_campaigns": "list_active_campaigns",
-        "query_indicator": "check_indicator"
-      }
+      "description": "TranSafe fraud intelligence - role-redacted campaigns, cases, indicators and defense artifacts."
     }
   }
 }

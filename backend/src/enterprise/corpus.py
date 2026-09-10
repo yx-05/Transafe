@@ -1669,7 +1669,7 @@ def build_replay_sequence() -> list[dict[str, Any]]:
         "exposure",
         "mcp_call",
         "info",
-        {"caller": "codebuddy", "tool": "ask_transafe", "role": "legal", "latency_ms": 340},
+        {"caller": "workbuddy", "tool": "ask_transafe", "role": "legal", "latency_ms": 340},
     )
     add(
         18.5,
