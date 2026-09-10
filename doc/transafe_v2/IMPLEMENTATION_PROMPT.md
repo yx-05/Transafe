@@ -38,8 +38,10 @@ Plus:
 
 ## Critical design decisions (already made — do not relitigate)
 
-1. **LLM provider: DeepSeek** via `langchain-openai` (`ChatOpenAI` with base_url override). NOT Groq for the enterprise layer. Groq stays for v1 workers.
-2. **Embeddings: DashScope `text-embedding-v3`** (1024-dim, free tier, works in China). NOT nomic-embed-text for v2. v1 keeps nomic.
+1. **LLM provider: DeepSeek** via `langchain-openai` (`ChatOpenAI` with base_url override). NOT Groq for the enterprise layer.
+   > **AS BUILT (2026-09):** the migration did not stop at the enterprise layer — v1's workers, `agents/llm.py`, STT and vision all moved to DeepSeek/DashScope too, because China accessibility was a hard requirement. Groq is no longer a dependency of the live path. See `01_upgrade_plan.md` §21.1.
+2. **Embeddings: DashScope `text-embedding-v3`** (free tier, works in China). NOT nomic-embed-text for v2. v1 keeps nomic.
+   > **AS BUILT:** requested at **768** dims, not 1024 — matching the existing `fraud_memory` pgvector schema and the `vector(768)` columns in §12. See §21.2.
 3. **Graph storage: Postgres** behind a `GraphStore` protocol. NOT Neo4j.
 4. **MCP transport: stdio** (CodeBuddy supports stdio). NOT HTTP/SSE as primary.
 5. **Discovery: event-driven incremental** on every case ingest, 30-second debounce, 5-min periodic sweep. NOT batch.
@@ -527,7 +529,7 @@ All fictional victims, fictional accounts, fictional domains.
 
 After implementation, you should be able to:
 
-1. **Run the backend:** `cd backend && uv run uvicorn src.api.main:app --reload --port 8000`
+1. **Run the backend:** `cd backend && uv run uvicorn main:app --reload --port 8000` (the app is `backend/main.py` — not `src.api.main`)
 2. **Run the frontend:** `cd frontend/enterprise && npm run dev -- --port 5174`
 3. **Run all tests:** `cd backend && uv run pytest tests/unit/ -v` → all green
 4. **Run the demo:**

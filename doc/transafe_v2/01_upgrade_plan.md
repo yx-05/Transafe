@@ -1538,5 +1538,69 @@ This document is the master. The following expand specific layers and should be 
 4. **Does this scale past the demo?** *"Campaign knowledge lives in memory and is retrieved at runtime — one pack per campaign, so a hundred thousand scams is a hundred thousand rows, not a hundred-thousand-line prompt. The agent's core skill only changes when we learn something that generalises across campaigns, and you can see on the registry screen that it has moved once in three campaigns."*
 5. **Is the orchestration actually agentic, or just a dictionary?** *"Orchestration is deterministic by design — that is what makes it auditable and what makes our before/after evaluation valid, since only the artifact version changes between runs. Reasoning sits where the action space is genuinely open: the phishing worker's planner decides whether and what to search the web for, and the Liaison Agent plans multi-step retrieval for arbitrary questions. Both are gated, bounded, have deterministic fallbacks, and log their reasoning trace."*
 
+---
+
+## 21. Implementation deltas — as built
+
+> This section records where the shipped code differs from the design above, and why. Where the two disagree, this section is authoritative: it describes what actually runs.
+
+### 21.1 Provider migration reached v1 (supersedes §3.3 and the "Groq stays for v1" decision)
+
+The design assumed v1 would keep Groq and only the v2 layer would use DeepSeek. That is not what shipped. China accessibility was a hard requirement, so the migration covered v1 as well:
+
+| Surface | Designed | As built |
+|---|---|---|
+| Worker LLMs (all 5) + `agents/llm.py` | Groq `llama-*` | **DeepSeek `deepseek-chat`** via `ChatOpenAI` + `base_url`, multi-key rotation |
+| STT (`services/stt.py`) | Groq Whisper `large-v3-turbo` | **DashScope Paraformer-v2**, Deepgram Nova-3 retained as fallback |
+| Vision (`services/vision.py`) | Groq vision | DeepSeek-compatible path |
+
+Consequences to state plainly rather than discover on stage:
+
+- **§1.1's "v1 is unchanged" is now false in letter.** The *control flow* is untouched — orchestrator, graph, scorer, XAI and dispatcher are the same code, and the v1 API surface and tests are unchanged — but the model and speech providers are not.
+- **The §7 determinism boundary is unaffected.** Provider choice changes which model answers, not which node runs. The evaluation in §11 remains attributable to the artifact version.
+- **Groq is no longer a dependency of the live path**, so §18's "LLM rate limits during the pitch" mitigation is now DeepSeek key rotation (still present, still multi-key).
+
+### 21.2 Embedding dimensionality is 768, not 1024
+
+`IMPLEMENTATION_PROMPT.md` decision #2 said DashScope `text-embedding-v3` at 1024 dims. The shipped configuration requests **768** dims (`db/vector_store.py`), which is what `case_mo.embedding` and `campaigns.mo_embedding` are declared as and what the existing `fraud_memory` schema already used. §12's `vector(768)` is correct; the prompt's 1024 is stale.
+
+### 21.3 Concurrent-call coalescing landed beyond the plan
+
+`api/websocket_call.py` gained transcript coalescing and relay handling for concurrent calls. Not in the plan, not part of the enterprise layer, and it touches the live path — noted here so it is not mistaken for v2 work during review.
+
+### 21.4 Artifact consumption is owned by the consumer
+
+§7.2 claimed "consumption receipts proving agents actually loaded it". As originally built, `propagation.propagate_artifact()` wrote the receipt *and* the `propagation_acknowledged` event on each agent's behalf, before the agent had read anything. Only `campaign_pack → phone_worker` had a real reader; `phone_agent_core`, `phishing_playbook_patch` and `txn_rule` were published, acknowledged, and read by nobody. The console's `consumed_by: phishing_worker ✅` line was therefore unearned.
+
+Now:
+
+| Artifact | Consumer | Where |
+|---|---|---|
+| `campaign_pack` | `phone_worker` | `_scan_high_risk_phrases` folds pack phrases into live detection |
+| `phone_agent_core` | `phone_worker` | preferred over `skills/phone_dialogue_guide.md` in the AUTO_TALK prompt |
+| `phishing_playbook_patch` | `phishing_worker` | merged into the playbook `heavy`/`light`/`url_patterns` |
+| `txn_rule` | `financial_worker` | `BLOCK` rules become a deterministic recipient deny set, enforced after the LLM |
+| `cs_advisory`, `compliance_brief` | — | external via MCP, by design (§8) |
+
+The propagator now emits `propagation_event` ("offered") only. The receipt and the `propagation_acknowledged` event come from `agents/workers/artifact_feed.py::_write_receipt`, i.e. from the agent that read the artifact. A receipt now means what §7.2 said it meant.
+
+### 21.5 The seed corpus seeds the generaliser's precondition
+
+§7.0 requires ≥ 2 *other* approved campaigns before a core-tier rule can be proposed. The original demo seed created **no campaign rows at all** — campaigns only appeared via discovery — so a LIVE run approving the SCAM-027 wave could never satisfy the gate, `maybe_generalise` always returned `None`, and the core-tier artifact existed only in the recorded replay. §15 warned about exactly this.
+
+`src/enterprise/seed_prior.py` now seeds SCAM-019 and SCAM-024 as `APPROVED`, each with three cases, real transcripts, extracted identifiers, MO fingerprints and campaign membership — plus a published `phone_agent_core` **v6** baseline whose content deliberately encodes no structural escalation rule. A LIVE publish therefore reads `v6 → v7`, matching the replay's narration, and the generaliser has genuine cross-campaign evidence for the invariant it proposes.
+
+### 21.6 Role set is nine, not six
+
+§9.3 lists six roles and `04_mcp_gateway.md` §5.1 lists a different six. The shipped `mcp/redaction.py` implements nine: `fraud_ops`, `compliance`, `customer_service`, `legal`, `auditor`, `analyst`, `partner_bank`, `external_researcher`, `public`. Unknown roles deny by default. Tools exposed: eight (`ask_transafe`, `list_active_campaigns`, `get_campaign`, `get_case_evidence`, `get_artifact`, `check_indicator`, `query_stats`, `query_mcp_log`), plus the `query_*` aliases from the build brief.
+
+### 21.7 Operational corrections
+
+| Claim | Correction |
+|---|---|
+| `uvicorn src.api.main:app` (prompt quick-start) | The app is `backend/main.py`: `uvicorn main:app`. `06_demo_runbook.md` and `DEMO_GUIDE.md` are right. |
+| MCP transport uses the `mcp` SDK | The stdio loop is hand-rolled JSON-RPC 2.0. The package is itself named `mcp`, so importing the SDK would shadow it on `sys.path`. |
+| §16 "delete `backend/mock_frontend`" | Not done. It is still present. |
+
 
 
