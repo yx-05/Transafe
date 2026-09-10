@@ -14,8 +14,10 @@ import pytest
 
 from mcp.redaction import project_log_entry
 from mcp.server import (
+    DEFAULT_CALLER,
     RATE_LIMIT_PER_MINUTE,
     TOOL_DEFINITIONS,
+    _load_env,
     _looks_like_uuid,
     check_rate_limit,
     handle_rpc,
@@ -567,3 +569,49 @@ async def test_rpc_allows_role_downgrade(audit):
             role="fraud_ops",
         )
     assert log.call_args.args[1] == "public"
+
+
+# ── standalone launch env ──────────────────────────────────────────────────
+
+
+def test_load_env_reads_the_backends_own_dotenv():
+    """The server loads ``backend/.env`` itself.
+
+    The FastAPI app calls ``load_dotenv()``, but an MCP client launches this
+    server as its own subprocess with an environment that has no Supabase
+    credentials. ``initialize`` and ``tools/list`` still succeed, so the client
+    reports the server as connected — and then every real tool call dies with
+    ``Supabase client is not initialized``. Failing at the first *query* rather
+    than at connect is what makes this worth a test.
+    """
+    with patch("dotenv.load_dotenv") as load:
+        _load_env()
+
+    load.assert_called_once()
+    path = load.call_args.args[0]
+    assert path.endswith(".env")
+    assert path.split("/")[-2] == "backend"
+
+
+def test_load_env_never_overrides_the_launching_clients_role():
+    """``.env`` must not be able to widen entitlement.
+
+    The client config is what decides the role ceiling. If loading the file
+    could overwrite ``TRANSAFE_ROLE``/``TRANSAFE_CALLER``, then whichever value
+    happened to be on disk would define entitlement — and a stale or committed
+    ``.env`` would silently promote every caller.
+    """
+    with patch("dotenv.load_dotenv") as load:
+        _load_env()
+
+    assert load.call_args.kwargs["override"] is False
+
+
+def test_default_caller_is_workbuddy():
+    """The fallback caller is the client we actually demo with.
+
+    ``TRANSAFE_CALLER`` in the client config overrides this, but a bare
+    ``python -m mcp.server`` has to stamp something, and it should name the
+    product the judges see on the MCP Log screen.
+    """
+    assert DEFAULT_CALLER == "workbuddy"

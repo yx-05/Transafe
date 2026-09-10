@@ -259,7 +259,7 @@ THEN implement these modules:
 
 3. backend/src/enterprise/liaison_agent.py — 4-iteration retrieval loop: (1) classify intent, (2) plan retrieval steps, (3) execute tool calls with redaction, (4) synthesise answer with citations. Uses DeepSeek. Has deterministic fallback. See 04_mcp_gateway.md §5.
 
-4. CodeBuddy MCP config file at backend/mcp/codebuddy_config.json — stdio connection config for CodeBuddy to connect to the MCP server. See 04_mcp_gateway.md §6.
+4. WorkBuddy MCP config file at backend/mcp/workbuddy_config.json — stdio connection config for WorkBuddy to connect to the MCP server. See 04_mcp_gateway.md §6.
 
 ALSO implement API endpoint:
 - GET /enterprise/api/mcp/log — recent MCP access log entries

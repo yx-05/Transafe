@@ -86,7 +86,7 @@ export function workerIdForEvent(event: NsEvent): string | null {
   return AGENT_TO_WORKER[raw] ?? null;
 }
 
-const EXPOSURE = { id: "exposure", label: "MCP · CodeBuddy", x: 610, y: 205 };
+const EXPOSURE = { id: "exposure", label: "MCP · WorkBuddy", x: 610, y: 205 };
 
 const NODE_W = 116;
 const NODE_H = 34;

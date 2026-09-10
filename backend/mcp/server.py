@@ -1,6 +1,6 @@
 """TranSafe MCP Server — L6, the door.
 
-Exposes TranSafe's fraud intelligence to external agentic systems (CodeBuddy,
+Exposes TranSafe's fraud intelligence to external agentic systems (WorkBuddy,
 Claude Desktop, a partner bank's compliance agent) over MCP's stdio transport,
 and enforces the four things that make that safe to do:
 
@@ -65,7 +65,9 @@ MCP_LOG_TABLE = "mcp_access_log"
 #: Least-privilege default. A caller that does not declare a role gets the
 #: public policy, never an internal one.
 DEFAULT_ROLE = "public"
-DEFAULT_CALLER = "codebuddy"
+#: Caller name recorded on every audit row. The client config sets
+#: ``TRANSAFE_CALLER`` explicitly; this is the fallback for a direct run.
+DEFAULT_CALLER = "workbuddy"
 
 #: Rate limiting — sliding one-minute window, per caller.
 RATE_LIMIT_PER_MINUTE = 60
@@ -161,7 +163,7 @@ def log_mcp_access(
     Screen G alongside the caller's own arguments.
 
     Args:
-        caller: Caller identifier, e.g. ``codebuddy``.
+        caller: Caller identifier, e.g. ``workbuddy``.
         role: Role the call was evaluated under.
         tool: Tool name requested (pre-alias-resolution name is fine).
         params: Arguments the caller supplied.
@@ -1086,8 +1088,33 @@ def _write(payload: dict[str, Any]) -> None:  # pragma: no cover - transport loo
     sys.stdout.flush()
 
 
+def _load_env() -> None:
+    """Load ``backend/.env`` before serving.
+
+    ``main.py`` calls ``load_dotenv()`` for the API process, but this server is
+    normally launched by an *external MCP client* as its own subprocess, with
+    whatever environment that client happens to have — which is empty of
+    Supabase credentials. Without this, ``initialize`` and ``tools/list`` still
+    succeed (they touch nothing), so the client happily reports the server as
+    connected, and then **every tool call** fails with
+    ``RuntimeError: Supabase client is not initialized``.
+
+    Not overridden: anything already in the environment wins, so the
+    ``TRANSAFE_ROLE`` / ``TRANSAFE_CALLER`` set by the client config cannot be
+    clobbered by this file. Entitlement must be decided by how the client
+    launched us, not by whatever happens to be on disk.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:  # pragma: no cover - dotenv is a runtime dependency
+        logger.warning("mcp: python-dotenv unavailable; relying on the inherited environment")
+        return
+    load_dotenv(os.path.join(_BACKEND_ROOT, ".env"), override=False)
+
+
 def main() -> None:  # pragma: no cover - process entry point
     """Process entry point for ``python -m mcp.server``."""
+    _load_env()
     logging.basicConfig(level=os.getenv("TRANSAFE_LOG_LEVEL", "INFO"), stream=sys.stderr)
     with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(serve_stdio())

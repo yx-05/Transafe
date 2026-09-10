@@ -382,9 +382,11 @@ If that prints minutes, don't press the button — use the server-side replay ab
 
 ---
 
-## Step 10 — Connect CodeBuddy as the Compliance department (MCP)
+## Step 10 — Connect WorkBuddy as the Compliance department (MCP)
 
-This is Act 5 of the demo: CodeBuddy connects to TranSafe's MCP server as a `compliance` role, queries fraud intelligence, and the Liaison Agent answers with role-based redaction applied.
+This is Act 5 of the demo: WorkBuddy (Tencent's agent) connects to TranSafe's MCP server as a `compliance` role, queries fraud intelligence, and the Liaison Agent answers with role-based redaction applied.
+
+This is the point of the whole MCP layer: an **external system** — not our own console, a third-party agent — is asking TranSafe questions and getting answers that are structurally scoped to what it is entitled to see.
 
 ### What the compliance role can see
 
@@ -392,21 +394,25 @@ This is Act 5 of the demo: CodeBuddy connects to TranSafe's MCP server as a `com
 |---------|------------|
 | Campaign details, MO fingerprints, indicators, artifacts, compliance briefs, case IDs, aggregate stats | Transcripts, victim names, phone numbers, account numbers, customer PII, raw case evidence |
 
-Redaction is **server-side and structural** — it runs on the payload before the Liaison Agent sees it. CodeBuddy literally cannot read fields it's not entitled to. This is not a prompt instruction; it cannot be prompt-injected away.
+Redaction is **server-side and structural** — it runs on the payload before the Liaison Agent sees it. WorkBuddy literally cannot read fields it's not entitled to. This is not a prompt instruction; it cannot be prompt-injected away.
 
 ### Step 10a: Ensure the backend is running
 
 The MCP server uses the same Supabase connection and env vars as the backend. Make sure the backend is already running (Step 1) so the database is accessible.
 
-### Step 10b: Configure CodeBuddy's MCP settings
+### Step 10b: Add TranSafe as a custom MCP server in WorkBuddy
 
-CodeBuddy stores MCP server config in `~/.codebuddy/mcp.json`. Edit it:
+WorkBuddy reads MCP server config from **`~/.workbuddy-ai/mcp.json`**.
+
+> **The filename matters.** It is `mcp.json`, **not** `.mcp.json` — WorkBuddy's own docs call this out, and a config placed at the wrong path fails silently: the server simply never appears.
+
+Open it:
 
 ```bash
-nano ~/.codebuddy/mcp.json
+nano ~/.workbuddy-ai/mcp.json
 ```
 
-Replace the contents with:
+Merge the `transafe` entry into the **existing** `mcpServers` object — do not replace the file, or you will clobber any other server you have configured:
 
 ```json
 {
@@ -416,43 +422,67 @@ Replace the contents with:
       "args": ["run", "python", "-m", "mcp.server"],
       "cwd": "/Users/Admin/Documents/GitHub/Transafe/backend",
       "env": {
-        "TRANSAFE_CALLER": "codebuddy",
+        "TRANSAFE_CALLER": "workbuddy",
         "TRANSAFE_ROLE": "compliance",
         "TRANSAFE_LOG_LEVEL": "INFO"
-      },
-      "transport": "stdio"
+      }
     }
   }
 }
 ```
 
 Key settings:
-- **`TRANSAFE_ROLE: "compliance"`** — this is the entitlement ceiling. CodeBuddy can request a narrower role per-call, but never a broader one. Launching with `compliance` and asking for `fraud_ops` gets you `compliance`.
+- **`TRANSAFE_ROLE: "compliance"`** — this is the entitlement ceiling. WorkBuddy can request a narrower role per-call, but never a broader one. Launching with `compliance` and asking for `fraud_ops` gets you `compliance`.
 - **`cwd`** — must point to your backend directory (where `uv` can find the project).
-- **`TRANSAFE_CALLER: "codebuddy"`** — stamps every audit log entry so you can trace who called what.
+- **`TRANSAFE_CALLER: "workbuddy"`** — stamps every audit log entry so you can trace who called what. This is the value that appears in the console's `caller` column.
 
-Save and close. **Restart CodeBuddy** (or reload the window) so it picks up the new MCP config.
+No `transport` key is needed — `command` implies stdio.
+
+**Credentials are not needed here.** The server loads `backend/.env` itself on startup, so `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` do not belong in this file. Only the `TRANSAFE_*` keys go in, because they describe *how this client is being launched*, not what the server needs to run.
+
+> If you ever see `Supabase client is not initialized` inside a WorkBuddy tool result, the `.env` did not load — check that `cwd` points at `backend/` and that `backend/.env` exists.
+
+### Step 10b-ii: Trust the server (do not skip this)
+
+Saving the file is **not** enough. WorkBuddy ships custom MCP servers **disabled** until you explicitly trust them, because an MCP server can execute code and touch your files.
+
+1. **Restart WorkBuddy** so it re-reads `mcp.json`.
+2. Open **connector management**.
+3. Find the **custom connectors** entry at the top-right.
+4. Click **Trust** on `transafe`.
+
+Until you click Trust, the server stays switched off and no tool call will reach TranSafe. If Step 10c shows nothing happening, this is almost always why.
 
 ### Step 10c: Verify the connection
 
-After CodeBuddy restarts, open a new CodeBuddy chat and type:
+In a new WorkBuddy conversation, type:
 
 ```
 List all active TranSafe campaigns
 ```
 
-CodeBuddy should call the `list_active_campaigns` MCP tool. The MCP server will:
+WorkBuddy should call the `list_active_campaigns` MCP tool. The MCP server will:
 1. Check the rate limit (60/min)
 2. Verify the `compliance` role is entitled to the `campaign` resource category
 3. Fetch campaign data from Supabase
 4. Run `redact_by_role()` on the payload — redacting transcript text, PII, phone numbers, account numbers
-5. Return the redacted result to CodeBuddy
+5. Return the redacted result to WorkBuddy
 6. Write an audit entry to `mcp_access_log`
 7. Emit an `exposure/mcp_call` ns_event (visible live on console Screen G)
 
+**Verify the server side independently** if WorkBuddy shows no tools. This handshake proves the server itself is healthy and isolates any problem to the client config:
+
+```bash
+cd /Users/Admin/Documents/GitHub/Transafe/backend
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+  | TRANSAFE_CALLER=workbuddy TRANSAFE_ROLE=compliance uv run python -m mcp.server
+```
+
+Expect `TranSafe MCP server ready (caller=workbuddy role=compliance)` followed by two JSON-RPC replies.
+
 ### Step 10d: Try these queries as compliance
 
-Open a CodeBuddy chat and try these prompts:
+In a WorkBuddy conversation, try these prompts:
 
 **1. Ask about a campaign:**
 ```
@@ -481,7 +511,7 @@ What are TranSafe's current stats? How many campaigns, cases, and artifacts?
 
 ### Step 10e: Compare roles (optional)
 
-To see how redaction changes by role, edit `~/.codebuddy/mcp.json` and change `TRANSAFE_ROLE` to a different role, restart CodeBuddy, and ask the same questions:
+To see how redaction changes by role, edit `~/.workbuddy-ai/mcp.json` and change `TRANSAFE_ROLE` to a different role, restart WorkBuddy, and ask the same questions:
 
 | Role | What they see |
 |------|---------------|
@@ -497,9 +527,9 @@ For example, the same campaign viewed as `fraud_ops` shows victim names, phone n
 
 ### Step 10f: Watch it live in the console
 
-While CodeBuddy makes MCP calls, have the Enterprise Console open in your browser at `http://localhost:5174/mcp`:
+While WorkBuddy makes MCP calls, have the Enterprise Console open in your browser at `http://localhost:5174/mcp`:
 
-- **MCP Log screen** shows every call in real time: the tool name, the caller (`codebuddy`), the role (`compliance`), the response status, and which fields were redacted
+- **MCP Log screen** shows every call in real time: the tool name, the caller (`workbuddy`), the role (`compliance`), the response status, and which fields were redacted
 - The **Overview screen** event ticker shows `exposure/mcp_call` events as they happen
 - Every call — success, denial, rate-limit rejection, error — is logged. An audit log that only records successes is useless for exactly the incident you'd want to investigate
 
@@ -510,7 +540,7 @@ curl http://localhost:8000/enterprise/mcp/log | python3 -m json.tool
 ```
 
 Each entry shows:
-- `caller` — who called (e.g., `codebuddy`)
+- `caller` — who called (e.g., `workbuddy`)
 - `role` — what role was used (e.g., `compliance`)
 - `tool` — which MCP tool was called
 - `params` — the call arguments (redacted per the viewer's own role)
@@ -603,9 +633,10 @@ curl -X POST http://localhost:8000/enterprise/demo/replay/start \
 curl -X POST http://localhost:8000/enterprise/demo/reset \
   -H "Content-Type: application/json" -d '{"reseed": true}'
 
-# 9. Connect CodeBuddy as compliance department
-# Edit ~/.codebuddy/mcp.json and add the transafe MCP server (see Step 10)
-# Restart CodeBuddy, then ask: "Tell me about TranSafe campaign SCAM-027"
+# 9. Connect WorkBuddy as compliance department
+# Merge the transafe entry into ~/.workbuddy-ai/mcp.json (see Step 10)
+# Restart WorkBuddy and click Trust on the custom connector, then ask:
+#   "Tell me about TranSafe campaign SCAM-027"
 ```
 
 ---

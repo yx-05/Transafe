@@ -17,7 +17,7 @@ importable and unit-testable with no transport and no third-party dependency.
    Adopting the official SDK requires **renaming this package first** — e.g.
    to ``mcp_gateway`` — and updating the imports in ``mcp/server.py``,
    ``src/enterprise/liaison_agent.py``, ``src/api/enterprise/router.py`` and
-   ``mcp/codebuddy_config.json``'s ``-m`` target. Do that rename before adding
+   ``mcp/workbuddy_config.json``'s ``-m`` target. Do that rename before adding
    the dependency, not after.
 
 Modules
