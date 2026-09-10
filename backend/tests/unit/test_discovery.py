@@ -216,7 +216,10 @@ async def test_propose_campaign_inserts_campaign(mock_client, mock_emit):
     payload = mock_table.insert.call_args[0][0]
     assert payload["status"] == "PENDING_VALIDATION"
     assert payload["case_count"] == 3
-    assert payload["code"] == "SCAM-001"
+    # Allocated from the demo's numbering floor, not from the row count: an
+    # empty registry must not name the wave SCAM-001 when the recorded replay,
+    # the console fixtures and the artefact citations all call it SCAM-027.
+    assert payload["code"] == "SCAM-027"
     mock_emit.assert_awaited()
     assert mock_emit.await_args.kwargs["event_type"] == "campaign_proposed"
 

@@ -16,6 +16,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 from src.enterprise.events import fetch_recent_events, get_broadcaster
 
@@ -44,6 +45,24 @@ async def enterprise_events_ws(
     broadcaster = get_broadcaster()
     queue = broadcaster.subscribe()
 
+    async def send(payload: Any) -> bool:
+        """Send one frame, reporting whether the client is still there.
+
+        A send to a socket whose peer has already gone raises inside starlette,
+        and uvicorn logs a bare ``socket.send() raised exception.`` for each
+        one. With a console that remounts on every navigation (React
+        StrictMode mounts twice), those lines are the dominant log noise and
+        they bury real errors. Treating a failed send as "client gone" ends the
+        loop immediately instead.
+        """
+        if websocket.client_state is not WebSocketState.CONNECTED:
+            return False
+        try:
+            await websocket.send_json(payload)
+        except Exception:  # noqa: BLE001 - a dead socket is not an error
+            return False
+        return True
+
     try:
         history: list[dict[str, Any]] = []
         if backlog:
@@ -60,18 +79,21 @@ async def enterprise_events_ws(
         # frame and the UI would go silently blank with no error on either side.
         # The heartbeat is deliberately not an ns_event: it fails the guard and
         # is dropped by the client, which is the intended no-op.
-        await websocket.send_json(history)
+        if not await send(history):
+            return
 
         while True:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_SECONDS)
             except TimeoutError:
-                await websocket.send_json({"type": "heartbeat"})
+                if not await send({"type": "heartbeat"}):
+                    break
                 continue
 
             if layer and event.get("layer") != layer:
                 continue
-            await websocket.send_json(event)
+            if not await send(event):
+                break
 
     except WebSocketDisconnect:
         logger.debug("enterprise ws: client disconnected")
@@ -80,4 +102,6 @@ async def enterprise_events_ws(
         with contextlib.suppress(Exception):
             await websocket.close()
     finally:
+        # The subscription must not outlive the socket, or every publish keeps
+        # filling a queue nobody will ever drain.
         broadcaster.unsubscribe(queue)

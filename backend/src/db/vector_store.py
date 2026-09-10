@@ -7,6 +7,7 @@ is used instead — it supports 768-dimensional output to match the existing pgv
 
 import logging
 import os
+import threading
 from typing import Any, cast
 
 from pydantic import BaseModel
@@ -16,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 # Lazy-initialized clients
 _dashscope_client: Any | None = None
-supabase_client: Client | None = None
 
 
 class FraudMemoryRecord(BaseModel):
@@ -33,27 +33,72 @@ class FraudMemoryRecord(BaseModel):
     source: str = "user_report"
 
 
-def init_vector_store() -> None:
-    """Initialize DashScope and Supabase clients for vector store operations."""
-    global _dashscope_client, supabase_client
+#: An explicitly injected client (tests, or a caller building its own).
+#: When set, it is returned as-is and nothing thread-local is created.
+supabase_client: Client | None = None
+
+#: One Supabase client per thread.
+#:
+#: ``supabase.Client`` wraps a **synchronous** httpx client, and httpx sync
+#: clients are not safe for concurrent use. The enterprise API runs every query
+#: in an ``asyncio.to_thread`` worker — 25 call sites in
+#: ``src/api/enterprise/router.py`` alone — so a single module-level client was
+#: being driven from many threads at once. Under that load the HTTP/2 stream
+#: corrupts and the peer terminates the connection, which surfaces as
+#: ``httpx.ReadError: [Errno 35] Resource temporarily unavailable`` and
+#: ``httpcore.RemoteProtocolError: <ConnectionTerminated ...>``.
+#:
+#: It went unnoticed because the failure is *survivable*: the API degrades to an
+#: empty result rather than erroring, so the console rendered zeroed counters
+#: instead of reporting a fault. A per-thread client removes the shared mutable
+#: state that made concurrency unsafe in the first place.
+_thread_local = threading.local()
+
+
+def _client_from_env() -> Client | None:
+    """Build a fresh Supabase client from the environment, or None if unset."""
     supabase_url = os.getenv("SUPABASE_URL", "")
     supabase_key = os.getenv("SUPABASE_SERVICE_KEY", "")
-
     if supabase_url and supabase_key:
-        supabase_client = create_client(supabase_url, supabase_key)
+        return create_client(supabase_url, supabase_key)
+    return None
+
+
+def init_vector_store() -> None:
+    """Initialize the DashScope and Supabase clients.
+
+    Retained for callers that want one eagerly-built client. Prefer
+    :func:`get_supabase_client`, which hands each thread its own.
+    """
+    global _dashscope_client, supabase_client
+    client = _client_from_env()
+    if client is not None:
+        supabase_client = client
 
 
 def get_supabase_client() -> Client:
-    """Get the initialized Supabase client.
+    """Return a Supabase client that is safe to use from the calling thread.
+
+    An explicitly set module-level ``supabase_client`` wins, so tests and
+    callers that inject their own are unaffected. Otherwise each thread lazily
+    builds and keeps its own client.
+
+    Returns:
+        A Supabase client bound to this thread.
 
     Raises:
-        RuntimeError: If Supabase client has not been initialized.
+        RuntimeError: If Supabase has not been configured.
     """
-    if supabase_client is None:
-        init_vector_store()
-    if supabase_client is None:
-        raise RuntimeError("Supabase client is not initialized.")
-    return supabase_client
+    if supabase_client is not None:
+        return supabase_client
+
+    client = getattr(_thread_local, "client", None)
+    if client is None:
+        client = _client_from_env()
+        if client is None:
+            raise RuntimeError("Supabase client is not initialized.")
+        _thread_local.client = client
+    return client
 
 
 def embed_text(text: str) -> list[float]:

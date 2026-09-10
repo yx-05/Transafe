@@ -47,6 +47,7 @@ from src.enterprise.corpus import (
 )
 from src.enterprise.entity_resolver import refresh_entity_stats
 from src.enterprise.events import emit_event, get_broadcaster
+from src.enterprise.seed_prior import build_prior_state
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +106,15 @@ if not PURGEABLE_TABLES.isdisjoint(V1_TABLES):
 _SEED_URL_NS = uuid.NAMESPACE_URL
 _SEED_PREFIX = "https://transafe.local/v2/seed"
 
-#: Run id stamped on replayed events so the console (and any consumer of
-#: ``ns_events``) can tell a scripted demo frame from a live one.
-REPLAY_RUN_ID = "demo-replay"
+#: Human-readable label for the recorded demo run. Kept separate from the id
+#: because ``ns_events.run_id`` is a UUID column: emitting the literal string
+#: "demo-replay" fails the INSERT with 22P02, and because the persist failure is
+#: swallowed the events still broadcast live while never being stored — so a
+#: reload mid-replay lost the run, and the console's backlog showed nothing.
+REPLAY_RUN_LABEL = "demo-replay"
+
+#: Stable UUID for the recorded run, derived the same way as the seed ids.
+REPLAY_RUN_ID = str(uuid.uuid5(_SEED_URL_NS, f"{_SEED_PREFIX}/{REPLAY_RUN_LABEL}"))
 
 _replay_lock = asyncio.Lock()
 
@@ -316,6 +323,27 @@ async def seed_demo_corpus(client: Any = None) -> dict[str, Any]:
             )
             links.append((rows["case"]["id"], key))
 
+    # ── Prior approved campaigns (the generaliser's precondition) ───────────
+    # ``maybe_generalise`` needs three approved campaigns before it will propose
+    # a core-tier rule, because a pattern present in one campaign is specific to
+    # it. With only the wave seeded, a LIVE run can approve exactly one campaign
+    # and the generaliser — correctly — declines, so the campaign-agnostic rule
+    # would exist only in the recorded replay. See ``src/enterprise/seed_prior.py``.
+    prior = build_prior_state(_seed_uuid)
+    users.update({row["id"]: row for row in prior["users"]})
+    cases.extend(prior["fraud_cases"])
+    transcripts.extend(prior["call_transcripts"])
+    mos.extend(prior["case_mo"])
+    for key, row in prior["entity_rows"].items():
+        existing = entity_rows.get(key)
+        if existing is None:
+            entity_rows[key] = row
+        else:
+            existing["case_count"] += row["case_count"]
+            if row["last_seen"] > existing["last_seen"]:
+                existing["last_seen"] = row["last_seen"]
+    links.extend(prior["links"])
+
     for mo in mos:
         # embed_text falls back to a deterministic local vector when no
         # embedding key is configured, so this never blocks the demo.
@@ -325,11 +353,24 @@ async def seed_demo_corpus(client: Any = None) -> dict[str, Any]:
             warnings.append(f"embedding: {exc}")
             logger.warning("demo seed: embedding failed: %s", exc)
 
+    for campaign in prior["campaigns"]:
+        # The novelty check compares a candidate campaign against these vectors,
+        # so a prior campaign without one would make every new wave look novel.
+        try:
+            campaign["mo_embedding"] = await asyncio.to_thread(
+                embed_text, campaign["mo_summary"]
+            )
+        except Exception as exc:  # noqa: BLE001 - degrade, never 500
+            warnings.append(f"campaign embedding: {exc}")
+
     counts = {
         "users": _upsert(supabase, "users", list(users.values()), warnings),
         "fraud_cases": _upsert(supabase, "fraud_cases", cases, warnings),
         "call_transcripts": _upsert(supabase, "call_transcripts", transcripts, warnings),
         "case_mo": _upsert(supabase, "case_mo", mos, warnings),
+        "campaigns": _upsert(supabase, "campaigns", prior["campaigns"], warnings),
+        "campaign_cases": _upsert(supabase, "campaign_cases", prior["campaign_cases"], warnings),
+        "artifacts": _upsert(supabase, "artifacts", prior["artifacts"], warnings),
     }
     ents, link_count = _seed_entities(supabase, entity_rows, links, warnings)
     counts["entities"] = ents
