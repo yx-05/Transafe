@@ -26,20 +26,20 @@ from src.db.vector_store import (
 )
 
 
-@patch("src.db.vector_store.groq_client")
-def test_embed_text_returns_768_float_vector(mock_groq: MagicMock) -> None:
+def test_embed_text_returns_768_float_vector() -> None:
     """Assert embed_text returns a 768-dimensional float vector."""
-    mock_response = MagicMock()
-    mock_response.data = [MagicMock(embedding=[0.1] * 768)]
-    mock_groq.embeddings.create.return_value = mock_response
+    import httpx
 
-    vector = embed_text("Scam alert message")
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"data": [{"embedding": [0.1] * 768}]}
+    mock_response.raise_for_status = MagicMock()
+
+    with patch.dict("os.environ", {"DASHSCOPE_API_KEY": "test-dashscope-key"}):
+        with patch("httpx.post", return_value=mock_response):
+            vector = embed_text("Scam alert message")
     assert isinstance(vector, list)
     assert len(vector) == 768
     assert all(isinstance(val, float) for val in vector)
-    mock_groq.embeddings.create.assert_called_once_with(
-        model="nomic-embed-text-v1.5", input="Scam alert message"
-    )
 
 
 @patch("src.db.vector_store.supabase_client")

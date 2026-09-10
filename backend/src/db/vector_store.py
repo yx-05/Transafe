@@ -1,13 +1,21 @@
-"""Groq pgvector Vector Store Helper for TranSafe Fraud Memory."""
+"""pgvector Vector Store Helper for TranSafe Fraud Memory.
 
+Uses Alibaba Cloud DashScope for embeddings (China-accessible, 768-dim compatible).
+DeepSeek API does not offer an embeddings endpoint, so DashScope's text-embedding-v3
+is used instead — it supports 768-dimensional output to match the existing pgvector schema.
+"""
+
+import logging
 import os
 from typing import Any, cast
 
-from groq import Groq
 from pydantic import BaseModel
 from supabase import Client, create_client
 
-groq_client: Groq | None = None
+logger = logging.getLogger(__name__)
+
+# Lazy-initialized clients
+_dashscope_client: Any | None = None
 supabase_client: Client | None = None
 
 
@@ -26,36 +34,20 @@ class FraudMemoryRecord(BaseModel):
 
 
 def init_vector_store() -> None:
-    """Initialize Groq and Supabase clients for vector store operations."""
-    global groq_client, supabase_client
-    groq_api_key = os.getenv("GROQ_API_KEY", "")
+    """Initialize DashScope and Supabase clients for vector store operations."""
+    global _dashscope_client, supabase_client
     supabase_url = os.getenv("SUPABASE_URL", "")
     supabase_key = os.getenv("SUPABASE_SERVICE_KEY", "")
 
-    if groq_api_key:
-        groq_client = Groq(api_key=groq_api_key)
     if supabase_url and supabase_key:
         supabase_client = create_client(supabase_url, supabase_key)
-
-
-def get_groq_client() -> Groq:
-    """Get the initialized Groq client.
-
-    Raises:
-        RuntimeError: If Groq client is not initialized.
-    """
-    if groq_client is None:
-        init_vector_store()
-    if groq_client is None:
-        raise RuntimeError("Groq client is not initialized.")
-    return groq_client
 
 
 def get_supabase_client() -> Client:
     """Get the initialized Supabase client.
 
     Raises:
-        RuntimeError: If Supabase client is not initialized.
+        RuntimeError: If Supabase client has not been initialized.
     """
     if supabase_client is None:
         init_vector_store()
@@ -65,7 +57,10 @@ def get_supabase_client() -> Client:
 
 
 def embed_text(text: str) -> list[float]:
-    """Generate 768-dimensional text embedding via Groq nomic-embed-text-v1.5.
+    """Generate 768-dimensional text embedding via Alibaba DashScope text-embedding-v3.
+
+    Falls back to a deterministic dummy vector for offline / mock testing when
+    no DashScope API key is available.
 
     Args:
         text: Input string to embed.
@@ -73,20 +68,41 @@ def embed_text(text: str) -> list[float]:
     Returns:
         List of 768 float values.
     """
+    api_key = os.getenv("DASHSCOPE_API_KEY", "")
+    if not api_key:
+        # Fallback to 768-dimensional deterministic dummy vector for offline / mock testing
+        import hashlib
+        import random
+        seed = int(hashlib.md5(text.encode()).hexdigest(), 16)
+        r = random.Random(seed)
+        return [round(r.uniform(-0.1, 0.1), 4) for _ in range(768)]
+
     try:
-        client = get_groq_client()
-        response = client.embeddings.create(
-            model="nomic-embed-text-v1.5",
-            input=text,
+        import httpx
+        response = httpx.post(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "text-embedding-v3",
+                "input": text,
+                "dimensions": 768,
+                "encoding_format": "float",
+            },
+            timeout=10.0,
         )
-        raw_embedding = response.data[0].embedding
+        response.raise_for_status()
+        data = response.json()
+        raw_embedding = data["data"][0]["embedding"]
         if isinstance(raw_embedding, list):
             return [float(x) for x in raw_embedding]
     except Exception:  # noqa: BLE001
-        # Fallback to 768-dimensional dummy float vector for offline / mock testing
+        # Fallback to 768-dimensional deterministic dummy vector
         import hashlib
-        seed = int(hashlib.md5(text.encode()).hexdigest(), 16)
         import random
+        seed = int(hashlib.md5(text.encode()).hexdigest(), 16)
         r = random.Random(seed)
         return [round(r.uniform(-0.1, 0.1), 4) for _ in range(768)]
     return [0.0] * 768
@@ -138,7 +154,7 @@ def hybrid_search_fraud_memory(
             Queries public.fraud_memory for exact matches on bank_accounts array,
             phone_numbers array, or text content tokens.
     Step 2: Dense Vector Similarity Search:
-            Queries public.fraud_memory using nomic-embed-text 768-dim embeddings.
+            Queries public.fraud_memory using 768-dim embeddings.
     Step 3: Deduplicates & Reranks Results.
     """
     client = get_supabase_client()
@@ -236,7 +252,7 @@ def add_fraud_memory(
 
     Args:
         case_id: Optional parent fraud case UUID.
-        fraud_type: Type of fraud (e.g., macau_scam, phishing, investment_scam).
+        fraud_type: Type of fraud (e.g. macau_scam, phishing, investment_scam).
         content: Narrative text embedded for vector search.
         metadata: Additional metadata dictionary (phone_numbers, bank_accounts, etc.).
     """

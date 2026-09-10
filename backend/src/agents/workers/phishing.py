@@ -9,10 +9,10 @@ import time
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
-from src.agents.llm import extract_json_object, invoke_groq_with_key_rotation
+from src.agents.llm import DEEPSEEK_BASE_URL, extract_json_object, invoke_groq_with_key_rotation
 from src.agents.prompts import (
     build_phishing_analysis_prompt,
     build_phishing_research_planner_prompt,
@@ -26,14 +26,19 @@ from src.services.vision import analyze_image, extract_text_from_image
 logger = logging.getLogger(__name__)
 
 
-def get_phishing_llm(model_name: str = "llama-3.3-70b-versatile") -> ChatGroq:
-    """Get ChatGroq LLM instance reading GROQ_API_KEY dynamically at runtime."""
-    raw_key = os.getenv("GROQ_API_KEY") or "gsk_placeholder_key_for_initialization"
-    return ChatGroq(model=model_name, temperature=0.0, api_key=SecretStr(raw_key))
+def get_phishing_llm(model_name: str = "deepseek-chat") -> ChatOpenAI:
+    """Get ChatOpenAI LLM instance (DeepSeek) reading DEEPSEEK_API_KEY dynamically at runtime."""
+    raw_key = os.getenv("DEEPSEEK_API_KEY") or "sk-placeholder_key_for_initialization"
+    return ChatOpenAI(
+        model=model_name,
+        temperature=0.0,
+        api_key=SecretStr(raw_key),
+        base_url=DEEPSEEK_BASE_URL,
+    )
 
 
 class DynamicPhishingLLM:
-    """Dynamic LLM proxy reading GROQ_API_KEY dynamically with multi-key rotation and fallback."""
+    """Dynamic LLM proxy using DeepSeek with multi-key rotation and fallback."""
 
     def invoke(self, messages: Any, **kwargs: Any) -> Any:
         return invoke_groq_with_key_rotation(messages)

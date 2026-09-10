@@ -87,7 +87,7 @@ class SessionStore:
             "caller_name": caller_name,
             "initiated_by": initiated_by,
             "call_mode": call_mode,
-            "stt_engine": "groq",
+            "stt_engine": "dashscope",
             "status": "RINGING",
             "created_at": datetime.now(UTC).isoformat(),
         }

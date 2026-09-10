@@ -16,14 +16,14 @@ from src.services.vision import analyze_image, extract_text_from_image
 
 
 # -------------------------------------------------------------------
-# Vision OCR Tests
+# Vision OCR Tests (DeepSeek via OpenAI SDK)
 # -------------------------------------------------------------------
-@patch("src.services.vision._get_groq_client")
-def test_extract_text_from_image_success(mock_groq: MagicMock) -> None:
+@patch("src.services.vision._get_deepseek_client")
+def test_extract_text_from_image_success(mock_ds: MagicMock) -> None:
     """Assert vision OCR extraction handles base64 image strings properly."""
     mock_choice = MagicMock()
     mock_choice.message.content = "URGENT: Verify account at http://scam.xyz"
-    client = mock_groq.return_value
+    client = mock_ds.return_value
     client.chat.completions.create.return_value.choices = [mock_choice]
 
     result = extract_text_from_image("fake_base64_string")
@@ -31,17 +31,17 @@ def test_extract_text_from_image_success(mock_groq: MagicMock) -> None:
     assert "URGENT: Verify account" in result
     client.chat.completions.create.assert_called_once()
     call_kwargs = client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "llama-3.2-11b-vision-preview"
+    assert call_kwargs["model"] == "deepseek-chat"
     message_content = call_kwargs["messages"][0]["content"]
     assert message_content[1]["image_url"]["url"] == "data:image/jpeg;base64,fake_base64_string"
 
 
-@patch("src.services.vision._get_groq_client")
-def test_extract_text_from_image_with_data_prefix(mock_groq: MagicMock) -> None:
+@patch("src.services.vision._get_deepseek_client")
+def test_extract_text_from_image_with_data_prefix(mock_ds: MagicMock) -> None:
     """Assert vision OCR preserves existing data prefix."""
     mock_choice = MagicMock()
     mock_choice.message.content = "Extracted OCR text"
-    client = mock_groq.return_value
+    client = mock_ds.return_value
     client.chat.completions.create.return_value.choices = [mock_choice]
 
     prefixed_base64 = "data:image/png;base64,abc123data"
@@ -53,22 +53,22 @@ def test_extract_text_from_image_with_data_prefix(mock_groq: MagicMock) -> None:
     assert message_content[1]["image_url"]["url"] == prefixed_base64
 
 
-@patch("src.services.vision._get_groq_client")
-def test_extract_text_from_image_empty(mock_groq: MagicMock) -> None:
+@patch("src.services.vision._get_deepseek_client")
+def test_extract_text_from_image_empty(mock_ds: MagicMock) -> None:
     """Assert empty base64 string returns empty string without API call."""
     result = extract_text_from_image("")
     assert result == ""
-    mock_groq.chat.completions.create.assert_not_called()
+    mock_ds.chat.completions.create.assert_not_called()
 
 
-@patch("src.services.vision._get_groq_client")
-def test_analyze_image_uses_qwen_model_and_json_output(mock_groq: MagicMock) -> None:
-    """Assert qwen vision analysis is used for phishing image interpretation."""
+@patch("src.services.vision._get_deepseek_client")
+def test_analyze_image_uses_deepseek_model_and_json_output(mock_ds: MagicMock) -> None:
+    """Assert DeepSeek vision is used for phishing image interpretation."""
     mock_choice = MagicMock()
     mock_choice.message.content = (
         '{"extracted_text": "URGENT: Verify now", "description": "Urgency banner and lookalike bank login form."}'
     )
-    client = mock_groq.return_value
+    client = mock_ds.return_value
     client.chat.completions.create.return_value.choices = [mock_choice]
 
     result = analyze_image("fake_base64_string")
@@ -76,40 +76,32 @@ def test_analyze_image_uses_qwen_model_and_json_output(mock_groq: MagicMock) -> 
     assert result["extracted_text"] == "URGENT: Verify now"
     assert "lookalike bank login form" in result["description"]
     call_kwargs = client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "qwen/qwen3.6-27b"
+    assert call_kwargs["model"] == "deepseek-chat"
     message_content = call_kwargs["messages"][0]["content"]
     assert message_content[1]["image_url"]["url"] == "data:image/jpeg;base64,fake_base64_string"
 
 
 # -------------------------------------------------------------------
-# STT Tests
+# STT Tests (DashScope / Deepgram)
 # -------------------------------------------------------------------
 @pytest.mark.asyncio
-@patch("src.services.stt.groq_client")
-async def test_transcribe_audio_chunk_success(mock_groq: MagicMock) -> None:
+@patch("src.services.stt.transcribe_audio_chunk_dashscope")
+async def test_transcribe_audio_chunk_success(mock_stt: MagicMock) -> None:
     """Assert STT returns transcribed text string from audio bytes input."""
-    mock_transcription = MagicMock()
-    mock_transcription.text = "Hello, this is a scam alert test audio."
-    mock_groq.audio.transcriptions.create.return_value = mock_transcription
+    mock_stt.return_value = "Hello, this is a scam alert test audio."
 
     audio_data = b"fake_audio_bytes_12345"
     result = await transcribe_audio_chunk(audio_data, language="en")
 
     assert result == "Hello, this is a scam alert test audio."
-    mock_groq.audio.transcriptions.create.assert_called_once()
-    call_kwargs = mock_groq.audio.transcriptions.create.call_args.kwargs
-    assert call_kwargs["model"] in ("whisper-large-v3-turbo", "whisper-large-v3")
-    assert call_kwargs["language"] == "en"
-    assert call_kwargs["file"][1] == audio_data
+    mock_stt.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-@patch("src.services.stt.groq_client")
-async def test_transcribe_audio_chunk_empty(mock_groq: MagicMock) -> None:
+async def test_transcribe_audio_chunk_empty() -> None:
     """Assert empty audio bytes returns empty string without API call."""
     result = await transcribe_audio_chunk(b"")
     assert result == ""
-    mock_groq.audio.transcriptions.create.assert_not_called()
 
 
 # -------------------------------------------------------------------

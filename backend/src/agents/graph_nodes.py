@@ -7,8 +7,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from groq import Groq
-
 from src.agents.state import GraphState
 from src.db.supabase import (
     freeze_transaction,

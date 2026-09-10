@@ -1,0 +1,86 @@
+{
+  "slug": "noise-01",
+  "case_id": "cb95ec2c-27fc-5ff8-bd35-35541f1357a4",
+  "case_number": 46,
+  "user_id": "c71cdfa0-ef3b-5d1d-a274-2a31d96b0503",
+  "customer_name": "Ravi (FICTIONAL)",
+  "kind": "noise",
+  "campaign": null,
+  "scam_family": "phishing",
+  "created_at": "2026-09-01T21:00:00Z",
+  "channel": "voice",
+  "risk_score": 61,
+  "transcript": [
+    {
+      "seq_idx": 0,
+      "speaker": "CALLER",
+      "utterance": "Hello, your e-wallet account has an unclaimed cashback reward.",
+      "risk_score": 25
+    },
+    {
+      "seq_idx": 1,
+      "speaker": "USER",
+      "utterance": "Really? How much?",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 2,
+      "speaker": "CALLER",
+      "utterance": "Mr Ravi, click the link https://ewallet-hadiah.example/tuntut to claim it before the promotion closes tonight.",
+      "risk_score": 70
+    },
+    {
+      "seq_idx": 3,
+      "speaker": "USER",
+      "utterance": "Do I need to log in?",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 4,
+      "speaker": "CALLER",
+      "utterance": "Yes, log in with your wallet password and confirm with the otp code.",
+      "risk_score": 80
+    },
+    {
+      "seq_idx": 5,
+      "speaker": "USER",
+      "utterance": "That sounds odd.",
+      "risk_score": 10
+    },
+    {
+      "seq_idx": 6,
+      "speaker": "AI_AGENT",
+      "utterance": "Warning: this call is directing you to an unverified link and asking for a one-time code.",
+      "risk_score": 85
+    }
+  ],
+  "mo_fingerprint": {
+    "impersonated_entity": null,
+    "pretext": "account compromised, funds must be moved",
+    "script_phases": [
+      "credential_harvest",
+      "phishing_link"
+    ],
+    "pressure_tactics": [],
+    "novel_phrases": [],
+    "languages": [
+      "en"
+    ],
+    "verification_evasion": null,
+    "evidence_utterances": [],
+    "narrative": "Derived deterministically from transcript structure (no LLM).",
+    "derived": true
+  },
+  "entities": [
+    {
+      "entity_type": "URL",
+      "value": "https://ewallet-hadiah.example/tuntut",
+      "value_norm": "ewallet-hadiah.example/tuntut"
+    },
+    {
+      "entity_type": "DOMAIN",
+      "value": "ewallet-hadiah.example",
+      "value_norm": "ewallet-hadiah.example"
+    }
+  ]
+}

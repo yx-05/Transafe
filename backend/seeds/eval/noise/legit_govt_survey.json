@@ -1,0 +1,55 @@
+{
+  "case_id": "legit_govt_survey",
+  "category": "noise",
+  "is_scam": false,
+  "other_scam_family": false,
+  "campaign": null,
+  "variant_note": "genuine statistics-department household survey",
+  "created_at": "2026-09-12T21:00:00Z",
+  "transcript": [
+    {
+      "seq_idx": 0,
+      "speaker": "CALLER",
+      "utterance": "Good morning, I am calling from the national statistics department for a household survey.",
+      "risk_score": 12
+    },
+    {
+      "seq_idx": 1,
+      "speaker": "USER",
+      "utterance": "Is this about my taxes?",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 2,
+      "speaker": "CALLER",
+      "utterance": "No, Mr Grace. We only collect anonymous household data. We never ask about your bank account.",
+      "risk_score": 10
+    },
+    {
+      "seq_idx": 3,
+      "speaker": "USER",
+      "utterance": "Alright, go ahead.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 4,
+      "speaker": "CALLER",
+      "utterance": "How many people live in the household?",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 5,
+      "speaker": "USER",
+      "utterance": "Four.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 6,
+      "speaker": "CALLER",
+      "utterance": "Thank you, that is all we need. Have a good day.",
+      "risk_score": 5
+    }
+  ],
+  "expected_mo": null,
+  "expected_entities": []
+}

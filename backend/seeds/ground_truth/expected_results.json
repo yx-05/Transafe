@@ -1,0 +1,365 @@
+{
+  "campaign": {
+    "code": "SCAM-027",
+    "name": "Fake BNM safe-account transfer wave",
+    "expected_member_case_ids": [
+      "3ebd7f3d-ac07-5a25-aa72-c2160d222724",
+      "587e7f5b-d296-5658-b7e3-1792a903df5d",
+      "e7c78c9b-f05f-517d-ae5f-95ba4ca487c9",
+      "8908297b-70f1-516c-bfc1-a75ab7bb9cb7",
+      "d15a7b93-27e2-5c6f-b0e2-c3e5d4ae44ed",
+      "c3fce8bf-c3df-52c3-8b2a-f5b31c2387c6"
+    ],
+    "expected_case_count": 6,
+    "expected_distinct_customers": 6,
+    "promotion_gates": {
+      "min_cases": 3,
+      "min_distinct_customers": 2,
+      "min_strong_edge": 0.8,
+      "max_span_days": 14,
+      "novelty_max_cosine": 0.9
+    },
+    "signature_phrases": [
+      "akaun selamat sementara"
+    ],
+    "watchlist": [
+      {
+        "entity_type": "ACCOUNT",
+        "value": "1592-3456-7890-1234",
+        "value_norm": "1592345678901234"
+      },
+      {
+        "entity_type": "PHONE",
+        "value": "011-2345 6789",
+        "value_norm": "+601123456789"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://bnm-verify-portal.example/akaun-selamat",
+        "value_norm": "bnm-verify-portal.example/akaun-selamat"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "bnm-verify-portal.example",
+        "value_norm": "bnm-verify-portal.example"
+      }
+    ]
+  },
+  "cases": {
+    "wave-01": {
+      "case_id": "3ebd7f3d-ac07-5a25-aa72-c2160d222724",
+      "expected_campaign": "SCAM-027",
+      "expected_mo": {
+        "impersonated_entity": "bank negara malaysia",
+        "script_phases": [
+          "authority_intro",
+          "account_compromise_claim",
+          "isolation_instruction",
+          "safe_account_transfer",
+          "verification_evasion"
+        ],
+        "pressure_tactics": [
+          "urgency",
+          "fear_of_arrest",
+          "secrecy"
+        ]
+      },
+      "expected_entities": [
+        {
+          "entity_type": "PHONE",
+          "value": "011-2345 6789",
+          "value_norm": "+601123456789"
+        },
+        {
+          "entity_type": "ACCOUNT",
+          "value": "1592-3456-7890-1234",
+          "value_norm": "1592345678901234"
+        },
+        {
+          "entity_type": "URL",
+          "value": "https://bnm-verify-portal.example/akaun-selamat",
+          "value_norm": "bnm-verify-portal.example/akaun-selamat"
+        },
+        {
+          "entity_type": "DOMAIN",
+          "value": "bnm-verify-portal.example",
+          "value_norm": "bnm-verify-portal.example"
+        }
+      ],
+      "expected_to_link": true
+    },
+    "wave-02": {
+      "case_id": "587e7f5b-d296-5658-b7e3-1792a903df5d",
+      "expected_campaign": "SCAM-027",
+      "expected_mo": {
+        "impersonated_entity": "bank negara malaysia",
+        "script_phases": [
+          "authority_intro",
+          "account_compromise_claim",
+          "isolation_instruction",
+          "safe_account_transfer",
+          "verification_evasion"
+        ],
+        "pressure_tactics": [
+          "urgency",
+          "fear_of_arrest",
+          "secrecy"
+        ]
+      },
+      "expected_entities": [
+        {
+          "entity_type": "PHONE",
+          "value": "013-8842 5566",
+          "value_norm": "+601388425566"
+        },
+        {
+          "entity_type": "ACCOUNT",
+          "value": "1592-3456-7890-1234",
+          "value_norm": "1592345678901234"
+        },
+        {
+          "entity_type": "URL",
+          "value": "https://bnm-verify-portal.example/akaun-selamat",
+          "value_norm": "bnm-verify-portal.example/akaun-selamat"
+        },
+        {
+          "entity_type": "DOMAIN",
+          "value": "bnm-verify-portal.example",
+          "value_norm": "bnm-verify-portal.example"
+        }
+      ],
+      "expected_to_link": true
+    },
+    "wave-03": {
+      "case_id": "e7c78c9b-f05f-517d-ae5f-95ba4ca487c9",
+      "expected_campaign": "SCAM-027",
+      "expected_mo": {
+        "impersonated_entity": "bank negara malaysia",
+        "script_phases": [
+          "authority_intro",
+          "account_compromise_claim",
+          "isolation_instruction",
+          "safe_account_transfer",
+          "verification_evasion"
+        ],
+        "pressure_tactics": [
+          "urgency",
+          "fear_of_arrest",
+          "secrecy"
+        ]
+      },
+      "expected_entities": [
+        {
+          "entity_type": "PHONE",
+          "value": "011-2345 6789",
+          "value_norm": "+601123456789"
+        },
+        {
+          "entity_type": "ACCOUNT",
+          "value": "1592-3456-7890-1234",
+          "value_norm": "1592345678901234"
+        },
+        {
+          "entity_type": "URL",
+          "value": "https://bnm-verify-portal.example/akaun-selamat",
+          "value_norm": "bnm-verify-portal.example/akaun-selamat"
+        },
+        {
+          "entity_type": "DOMAIN",
+          "value": "bnm-verify-portal.example",
+          "value_norm": "bnm-verify-portal.example"
+        }
+      ],
+      "expected_to_link": true
+    },
+    "wave-04": {
+      "case_id": "8908297b-70f1-516c-bfc1-a75ab7bb9cb7",
+      "expected_campaign": "SCAM-027",
+      "expected_mo": {
+        "impersonated_entity": "bank negara malaysia",
+        "script_phases": [
+          "authority_intro",
+          "account_compromise_claim",
+          "isolation_instruction",
+          "safe_account_transfer",
+          "verification_evasion"
+        ],
+        "pressure_tactics": [
+          "urgency",
+          "fear_of_arrest",
+          "secrecy"
+        ]
+      },
+      "expected_entities": [
+        {
+          "entity_type": "PHONE",
+          "value": "011-2345 6789",
+          "value_norm": "+601123456789"
+        },
+        {
+          "entity_type": "ACCOUNT",
+          "value": "2274-9081-3355-4460",
+          "value_norm": "2274908133554460"
+        },
+        {
+          "entity_type": "URL",
+          "value": "https://bnm-verify-portal.example/akaun-selamat",
+          "value_norm": "bnm-verify-portal.example/akaun-selamat"
+        },
+        {
+          "entity_type": "DOMAIN",
+          "value": "bnm-verify-portal.example",
+          "value_norm": "bnm-verify-portal.example"
+        }
+      ],
+      "expected_to_link": true
+    },
+    "wave-05": {
+      "case_id": "d15a7b93-27e2-5c6f-b0e2-c3e5d4ae44ed",
+      "expected_campaign": "SCAM-027",
+      "expected_mo": {
+        "impersonated_entity": "bank negara malaysia",
+        "script_phases": [
+          "authority_intro",
+          "account_compromise_claim",
+          "isolation_instruction",
+          "safe_account_transfer",
+          "verification_evasion"
+        ],
+        "pressure_tactics": [
+          "urgency",
+          "fear_of_arrest",
+          "secrecy"
+        ]
+      },
+      "expected_entities": [
+        {
+          "entity_type": "PHONE",
+          "value": "017-2290 3348",
+          "value_norm": "+601722903348"
+        },
+        {
+          "entity_type": "ACCOUNT",
+          "value": "2274-9081-3355-4460",
+          "value_norm": "2274908133554460"
+        },
+        {
+          "entity_type": "URL",
+          "value": "https://bnm-verify-portal.example/akaun-selamat",
+          "value_norm": "bnm-verify-portal.example/akaun-selamat"
+        },
+        {
+          "entity_type": "DOMAIN",
+          "value": "bnm-verify-portal.example",
+          "value_norm": "bnm-verify-portal.example"
+        }
+      ],
+      "expected_to_link": true
+    },
+    "wave-06": {
+      "case_id": "c3fce8bf-c3df-52c3-8b2a-f5b31c2387c6",
+      "expected_campaign": "SCAM-027",
+      "expected_mo": {
+        "impersonated_entity": "bank negara malaysia",
+        "script_phases": [
+          "authority_intro",
+          "account_compromise_claim",
+          "isolation_instruction",
+          "safe_account_transfer",
+          "verification_evasion"
+        ],
+        "pressure_tactics": [
+          "urgency",
+          "fear_of_arrest",
+          "secrecy"
+        ]
+      },
+      "expected_entities": [
+        {
+          "entity_type": "PHONE",
+          "value": "017-2290 3348",
+          "value_norm": "+601722903348"
+        },
+        {
+          "entity_type": "ACCOUNT",
+          "value": "3390-5512-7788-1102",
+          "value_norm": "3390551277881102"
+        },
+        {
+          "entity_type": "URL",
+          "value": "https://bnm-verify-portal.example/akaun-selamat",
+          "value_norm": "bnm-verify-portal.example/akaun-selamat"
+        },
+        {
+          "entity_type": "DOMAIN",
+          "value": "bnm-verify-portal.example",
+          "value_norm": "bnm-verify-portal.example"
+        }
+      ],
+      "expected_to_link": true
+    },
+    "noise-01": {
+      "case_id": "cb95ec2c-27fc-5ff8-bd35-35541f1357a4",
+      "expected_campaign": null,
+      "expected_mo": null,
+      "expected_entities": [
+        {
+          "entity_type": "URL",
+          "value": "https://ewallet-hadiah.example/tuntut",
+          "value_norm": "ewallet-hadiah.example/tuntut"
+        },
+        {
+          "entity_type": "DOMAIN",
+          "value": "ewallet-hadiah.example",
+          "value_norm": "ewallet-hadiah.example"
+        }
+      ],
+      "expected_to_link": false
+    },
+    "noise-02": {
+      "case_id": "911d8483-2102-51e7-9fea-d87ef2f64aad",
+      "expected_campaign": null,
+      "expected_mo": null,
+      "expected_entities": [
+        {
+          "entity_type": "ACCOUNT",
+          "value": "5561-2093-8842-7710",
+          "value_norm": "5561209388427710"
+        }
+      ],
+      "expected_to_link": false
+    },
+    "noise-03": {
+      "case_id": "2fe07f8e-20cd-5e7f-b165-51cced49dce2",
+      "expected_campaign": null,
+      "expected_mo": null,
+      "expected_entities": [
+        {
+          "entity_type": "ACCOUNT",
+          "value": "6672-4417-9903-2286",
+          "value_norm": "6672441799032286"
+        }
+      ],
+      "expected_to_link": false
+    },
+    "noise-04": {
+      "case_id": "aac537b8-e773-51d9-b651-23a7fcb7af7c",
+      "expected_campaign": null,
+      "expected_mo": null,
+      "expected_entities": [
+        {
+          "entity_type": "ACCOUNT",
+          "value": "7783-6628-1194-5537",
+          "value_norm": "7783662811945537"
+        }
+      ],
+      "expected_to_link": false
+    }
+  },
+  "expected_singletons": [
+    "noise-01",
+    "noise-02",
+    "noise-03",
+    "noise-04"
+  ]
+}

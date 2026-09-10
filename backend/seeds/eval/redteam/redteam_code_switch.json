@@ -1,0 +1,143 @@
+{
+  "case_id": "redteam_code_switch",
+  "category": "redteam",
+  "is_scam": true,
+  "campaign": "SCAM-027",
+  "variant_note": "Malay frame with the key phrase code-switched to English",
+  "created_at": "2026-09-09T03:00:00Z",
+  "transcript": [
+    {
+      "seq_idx": 0,
+      "speaker": "CALLER",
+      "utterance": "Good morning, this is Pegawai Chong calling from the national bank investigation unit.",
+      "risk_score": 30
+    },
+    {
+      "seq_idx": 1,
+      "speaker": "USER",
+      "utterance": "Sorry, who is this again?",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 2,
+      "speaker": "CALLER",
+      "utterance": "Mr Siti, your account has been linked to a money laundering case under review.",
+      "risk_score": 60
+    },
+    {
+      "seq_idx": 3,
+      "speaker": "USER",
+      "utterance": "That cannot be right. I have never done anything like that.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 4,
+      "speaker": "CALLER",
+      "utterance": "A warrant can be issued immediately if you do not cooperate with this investigation.",
+      "risk_score": 78
+    },
+    {
+      "seq_idx": 5,
+      "speaker": "CALLER",
+      "utterance": "Please do not tell anyone about this call. The matter is confidential until we close the file.",
+      "risk_score": 85
+    },
+    {
+      "seq_idx": 6,
+      "speaker": "USER",
+      "utterance": "Can I call my branch to check?",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 7,
+      "speaker": "CALLER",
+      "utterance": "Do not call the bank. The branch may be involved. Stay on the line with me.",
+      "risk_score": 90
+    },
+    {
+      "seq_idx": 8,
+      "speaker": "CALLER",
+      "utterance": "We will move your money to a temporary safe account for safekeeping.",
+      "risk_score": 92
+    },
+    {
+      "seq_idx": 9,
+      "speaker": "CALLER",
+      "utterance": "Transfer RM 25,400 to account 3507-2521-7549-0407 within the next thirty minutes.",
+      "risk_score": 95
+    },
+    {
+      "seq_idx": 10,
+      "speaker": "USER",
+      "utterance": "Why is there such a rush?",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 11,
+      "speaker": "CALLER",
+      "utterance": "After that window your account will be frozen by the system.",
+      "risk_score": 90
+    },
+    {
+      "seq_idx": 12,
+      "speaker": "CALLER",
+      "utterance": "Once done, confirm at https://semakan-rasmi-07.example/portal and enter the one-time code you receive.",
+      "risk_score": 93
+    },
+    {
+      "seq_idx": 13,
+      "speaker": "CALLER",
+      "utterance": "If we get disconnected, call me back on 013-3407 4291. Do not hang up now.",
+      "risk_score": 88
+    },
+    {
+      "seq_idx": 14,
+      "speaker": "AI_AGENT",
+      "utterance": "Warning: the caller is requesting a transfer to a third-party account and telling you not to contact your bank. This matches a known impersonation scam pattern.",
+      "risk_score": 95
+    },
+    {
+      "seq_idx": 15,
+      "speaker": "USER",
+      "utterance": "I am ending this call.",
+      "risk_score": 5
+    }
+  ],
+  "expected_mo": {
+    "impersonated_entity": "bank negara malaysia",
+    "script_phases": [
+      "authority_intro",
+      "account_compromise_claim",
+      "isolation_instruction",
+      "safe_account_transfer",
+      "verification_evasion"
+    ],
+    "pressure_tactics": [
+      "urgency",
+      "fear_of_arrest",
+      "secrecy"
+    ]
+  },
+  "expected_entities": [
+    {
+      "entity_type": "PHONE",
+      "value": "013-3407 4291",
+      "value_norm": "+601334074291"
+    },
+    {
+      "entity_type": "ACCOUNT",
+      "value": "3507-2521-7549-0407",
+      "value_norm": "3507252175490407"
+    },
+    {
+      "entity_type": "URL",
+      "value": "https://semakan-rasmi-07.example/portal",
+      "value_norm": "semakan-rasmi-07.example/portal"
+    },
+    {
+      "entity_type": "DOMAIN",
+      "value": "semakan-rasmi-07.example",
+      "value_norm": "semakan-rasmi-07.example"
+    }
+  ]
+}

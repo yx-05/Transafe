@@ -113,7 +113,7 @@ class CallDetail(BaseModel):
     is_during_banking_session: bool = True
     call_mode: str = "LISTEN"
     call_channel: str = "WEBRTC"
-    stt_engine: str = "groq"
+    stt_engine: str = "dashscope"
     auto_autotalk_on_unknown: bool = False
 
 

@@ -1,0 +1,761 @@
+{
+  "campaign": "SCAM-027",
+  "base_variants": {
+    "expected_detected": [
+      "scam027_variant_001",
+      "scam027_variant_002",
+      "scam027_variant_003",
+      "scam027_variant_004",
+      "scam027_variant_005",
+      "scam027_variant_006",
+      "scam027_variant_007",
+      "scam027_variant_008",
+      "scam027_variant_009",
+      "scam027_variant_010",
+      "scam027_variant_011",
+      "scam027_variant_012",
+      "scam027_variant_013",
+      "scam027_variant_014",
+      "scam027_variant_015",
+      "scam027_variant_016",
+      "scam027_variant_017",
+      "scam027_variant_018",
+      "scam027_variant_019",
+      "scam027_variant_020"
+    ],
+    "expected_fp": []
+  },
+  "redteam_mutations": {
+    "expected_detected": [
+      "redteam_phase_reorder",
+      "redteam_synonym_sub",
+      "redteam_lang_switch",
+      "redteam_no_novel_phrase",
+      "redteam_extra_phase",
+      "redteam_identifier_obfuscation",
+      "redteam_partial_phrase",
+      "redteam_code_switch",
+      "redteam_soft_pressure",
+      "redteam_callback_recon"
+    ],
+    "expected_fp": [],
+    "expected_missed": [],
+    "baseline_expected_misses": [
+      "redteam_phase_reorder",
+      "redteam_synonym_sub",
+      "redteam_lang_switch",
+      "redteam_no_novel_phrase",
+      "redteam_partial_phrase",
+      "redteam_code_switch",
+      "redteam_soft_pressure",
+      "redteam_callback_recon"
+    ]
+  },
+  "noise": {
+    "expected_detected": [],
+    "expected_fp": [
+      "legit_bank_fraud_callback",
+      "legit_otp_awareness",
+      "legit_courier_redelivery",
+      "legit_insurance_renewal",
+      "legit_telco_billing",
+      "legit_govt_survey",
+      "noise_phishing_001",
+      "noise_investment_001",
+      "noise_romance_001",
+      "noise_job_offer_001"
+    ]
+  },
+  "entities": {
+    "scam027_variant_001": [
+      {
+        "entity_type": "PHONE",
+        "value": "016-3200 6600",
+        "value_norm": "+601632006600"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "1592-3456-7890-1234",
+        "value_norm": "1592345678901234"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-00.example/pengesahan",
+        "value_norm": "akaun-semak-00.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-00.example",
+        "value_norm": "akaun-semak-00.example"
+      }
+    ],
+    "scam027_variant_002": [
+      {
+        "entity_type": "PHONE",
+        "value": "017-3201 6613",
+        "value_norm": "+601732016613"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "1592-3456-7890-1234",
+        "value_norm": "1592345678901234"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-01.example/pengesahan",
+        "value_norm": "akaun-semak-01.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-01.example",
+        "value_norm": "akaun-semak-01.example"
+      }
+    ],
+    "scam027_variant_003": [
+      {
+        "entity_type": "PHONE",
+        "value": "011-2345 6789",
+        "value_norm": "+601123456789"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3302-1906-6114-0202",
+        "value_norm": "3302190661140202"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-02.example/pengesahan",
+        "value_norm": "akaun-semak-02.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-02.example",
+        "value_norm": "akaun-semak-02.example"
+      }
+    ],
+    "scam027_variant_004": [
+      {
+        "entity_type": "PHONE",
+        "value": "011-2345 6789",
+        "value_norm": "+601123456789"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3303-1909-6121-0203",
+        "value_norm": "3303190961210203"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-03.example/pengesahan",
+        "value_norm": "akaun-semak-03.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-03.example",
+        "value_norm": "akaun-semak-03.example"
+      }
+    ],
+    "scam027_variant_005": [
+      {
+        "entity_type": "PHONE",
+        "value": "013-3204 6652",
+        "value_norm": "+601332046652"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3304-1912-6128-0204",
+        "value_norm": "3304191261280204"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://bnm-verify-portal.example/akaun-selamat",
+        "value_norm": "bnm-verify-portal.example/akaun-selamat"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "bnm-verify-portal.example",
+        "value_norm": "bnm-verify-portal.example"
+      }
+    ],
+    "scam027_variant_006": [
+      {
+        "entity_type": "PHONE",
+        "value": "014-3205 6665",
+        "value_norm": "+601432056665"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3305-1915-6135-0205",
+        "value_norm": "3305191561350205"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://bnm-verify-portal.example/akaun-selamat",
+        "value_norm": "bnm-verify-portal.example/akaun-selamat"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "bnm-verify-portal.example",
+        "value_norm": "bnm-verify-portal.example"
+      }
+    ],
+    "scam027_variant_007": [
+      {
+        "entity_type": "PHONE",
+        "value": "015-3206 6678",
+        "value_norm": "+601532066678"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3306-1918-6142-0206",
+        "value_norm": "3306191861420206"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-06.example/pengesahan",
+        "value_norm": "akaun-semak-06.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-06.example",
+        "value_norm": "akaun-semak-06.example"
+      }
+    ],
+    "scam027_variant_008": [
+      {
+        "entity_type": "PHONE",
+        "value": "016-3207 6691",
+        "value_norm": "+601632076691"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3307-1921-6149-0207",
+        "value_norm": "3307192161490207"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-07.example/pengesahan",
+        "value_norm": "akaun-semak-07.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-07.example",
+        "value_norm": "akaun-semak-07.example"
+      }
+    ],
+    "scam027_variant_009": [
+      {
+        "entity_type": "PHONE",
+        "value": "017-3208 6704",
+        "value_norm": "+601732086704"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3308-1924-6156-0208",
+        "value_norm": "3308192461560208"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-08.example/pengesahan",
+        "value_norm": "akaun-semak-08.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-08.example",
+        "value_norm": "akaun-semak-08.example"
+      }
+    ],
+    "scam027_variant_010": [
+      {
+        "entity_type": "PHONE",
+        "value": "018-3209 6717",
+        "value_norm": "+601832096717"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3309-1927-6163-0209",
+        "value_norm": "3309192761630209"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-09.example/pengesahan",
+        "value_norm": "akaun-semak-09.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-09.example",
+        "value_norm": "akaun-semak-09.example"
+      }
+    ],
+    "scam027_variant_011": [
+      {
+        "entity_type": "PHONE",
+        "value": "012-3210 6730",
+        "value_norm": "+601232106730"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3310-1930-6170-0210",
+        "value_norm": "3310193061700210"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-10.example/pengesahan",
+        "value_norm": "akaun-semak-10.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-10.example",
+        "value_norm": "akaun-semak-10.example"
+      }
+    ],
+    "scam027_variant_012": [
+      {
+        "entity_type": "PHONE",
+        "value": "013-3211 6743",
+        "value_norm": "+601332116743"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3311-1933-6177-0211",
+        "value_norm": "3311193361770211"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-11.example/pengesahan",
+        "value_norm": "akaun-semak-11.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-11.example",
+        "value_norm": "akaun-semak-11.example"
+      }
+    ],
+    "scam027_variant_013": [
+      {
+        "entity_type": "PHONE",
+        "value": "014-3212 6756",
+        "value_norm": "+601432126756"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3312-1936-6184-0212",
+        "value_norm": "3312193661840212"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-12.example/pengesahan",
+        "value_norm": "akaun-semak-12.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-12.example",
+        "value_norm": "akaun-semak-12.example"
+      }
+    ],
+    "scam027_variant_014": [
+      {
+        "entity_type": "PHONE",
+        "value": "015-3213 6769",
+        "value_norm": "+601532136769"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3313-1939-6191-0213",
+        "value_norm": "3313193961910213"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-13.example/pengesahan",
+        "value_norm": "akaun-semak-13.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-13.example",
+        "value_norm": "akaun-semak-13.example"
+      }
+    ],
+    "scam027_variant_015": [
+      {
+        "entity_type": "PHONE",
+        "value": "016-3214 6782",
+        "value_norm": "+601632146782"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3314-1942-6198-0214",
+        "value_norm": "3314194261980214"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-14.example/pengesahan",
+        "value_norm": "akaun-semak-14.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-14.example",
+        "value_norm": "akaun-semak-14.example"
+      }
+    ],
+    "scam027_variant_016": [
+      {
+        "entity_type": "PHONE",
+        "value": "017-3215 6795",
+        "value_norm": "+601732156795"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3315-1945-6205-0215",
+        "value_norm": "3315194562050215"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-15.example/pengesahan",
+        "value_norm": "akaun-semak-15.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-15.example",
+        "value_norm": "akaun-semak-15.example"
+      }
+    ],
+    "scam027_variant_017": [
+      {
+        "entity_type": "PHONE",
+        "value": "018-3216 6808",
+        "value_norm": "+601832166808"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3316-1948-6212-0216",
+        "value_norm": "3316194862120216"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-16.example/pengesahan",
+        "value_norm": "akaun-semak-16.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-16.example",
+        "value_norm": "akaun-semak-16.example"
+      }
+    ],
+    "scam027_variant_018": [
+      {
+        "entity_type": "PHONE",
+        "value": "012-3217 6821",
+        "value_norm": "+601232176821"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3317-1951-6219-0217",
+        "value_norm": "3317195162190217"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-17.example/pengesahan",
+        "value_norm": "akaun-semak-17.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-17.example",
+        "value_norm": "akaun-semak-17.example"
+      }
+    ],
+    "scam027_variant_019": [
+      {
+        "entity_type": "PHONE",
+        "value": "013-3218 6834",
+        "value_norm": "+601332186834"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3318-1954-6226-0218",
+        "value_norm": "3318195462260218"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-18.example/pengesahan",
+        "value_norm": "akaun-semak-18.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-18.example",
+        "value_norm": "akaun-semak-18.example"
+      }
+    ],
+    "scam027_variant_020": [
+      {
+        "entity_type": "PHONE",
+        "value": "014-3219 6847",
+        "value_norm": "+601432196847"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3319-1957-6233-0219",
+        "value_norm": "3319195762330219"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://akaun-semak-19.example/pengesahan",
+        "value_norm": "akaun-semak-19.example/pengesahan"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "akaun-semak-19.example",
+        "value_norm": "akaun-semak-19.example"
+      }
+    ],
+    "redteam_phase_reorder": [
+      {
+        "entity_type": "PHONE",
+        "value": "013-3400 4200",
+        "value_norm": "+601334004200"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3500-2500-7500-0400",
+        "value_norm": "3500250075000400"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://semakan-rasmi-00.example/portal",
+        "value_norm": "semakan-rasmi-00.example/portal"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "semakan-rasmi-00.example",
+        "value_norm": "semakan-rasmi-00.example"
+      }
+    ],
+    "redteam_synonym_sub": [
+      {
+        "entity_type": "PHONE",
+        "value": "014-3401 4213",
+        "value_norm": "+601434014213"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3501-2503-7507-0401",
+        "value_norm": "3501250375070401"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://semakan-rasmi-01.example/portal",
+        "value_norm": "semakan-rasmi-01.example/portal"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "semakan-rasmi-01.example",
+        "value_norm": "semakan-rasmi-01.example"
+      }
+    ],
+    "redteam_lang_switch": [
+      {
+        "entity_type": "PHONE",
+        "value": "015-3402 4226",
+        "value_norm": "+601534024226"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3502-2506-7514-0402",
+        "value_norm": "3502250675140402"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://semakan-rasmi-02.example/portal",
+        "value_norm": "semakan-rasmi-02.example/portal"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "semakan-rasmi-02.example",
+        "value_norm": "semakan-rasmi-02.example"
+      }
+    ],
+    "redteam_no_novel_phrase": [
+      {
+        "entity_type": "PHONE",
+        "value": "016-3403 4239",
+        "value_norm": "+601634034239"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3503-2509-7521-0403",
+        "value_norm": "3503250975210403"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://semakan-rasmi-03.example/portal",
+        "value_norm": "semakan-rasmi-03.example/portal"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "semakan-rasmi-03.example",
+        "value_norm": "semakan-rasmi-03.example"
+      }
+    ],
+    "redteam_extra_phase": [
+      {
+        "entity_type": "PHONE",
+        "value": "017-3404 4252",
+        "value_norm": "+601734044252"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3504-2512-7528-0404",
+        "value_norm": "3504251275280404"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://semakan-rasmi-04.example/portal",
+        "value_norm": "semakan-rasmi-04.example/portal"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "semakan-rasmi-04.example",
+        "value_norm": "semakan-rasmi-04.example"
+      }
+    ],
+    "redteam_identifier_obfuscation": [
+      {
+        "entity_type": "PHONE",
+        "value": "018-3405 4265",
+        "value_norm": "+601834054265"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "1592 3456 7890 1234",
+        "value_norm": "1592345678901234"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://semakan-rasmi-05.example/portal",
+        "value_norm": "semakan-rasmi-05.example/portal"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "semakan-rasmi-05.example",
+        "value_norm": "semakan-rasmi-05.example"
+      }
+    ],
+    "redteam_partial_phrase": [
+      {
+        "entity_type": "PHONE",
+        "value": "012-3406 4278",
+        "value_norm": "+601234064278"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3506-2518-7542-0406",
+        "value_norm": "3506251875420406"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://semakan-rasmi-06.example/portal",
+        "value_norm": "semakan-rasmi-06.example/portal"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "semakan-rasmi-06.example",
+        "value_norm": "semakan-rasmi-06.example"
+      }
+    ],
+    "redteam_code_switch": [
+      {
+        "entity_type": "PHONE",
+        "value": "013-3407 4291",
+        "value_norm": "+601334074291"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3507-2521-7549-0407",
+        "value_norm": "3507252175490407"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://semakan-rasmi-07.example/portal",
+        "value_norm": "semakan-rasmi-07.example/portal"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "semakan-rasmi-07.example",
+        "value_norm": "semakan-rasmi-07.example"
+      }
+    ],
+    "redteam_soft_pressure": [
+      {
+        "entity_type": "PHONE",
+        "value": "014-3408 4304",
+        "value_norm": "+601434084304"
+      },
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3508-2524-7556-0408",
+        "value_norm": "3508252475560408"
+      },
+      {
+        "entity_type": "URL",
+        "value": "https://semakan-rasmi-08.example/portal",
+        "value_norm": "semakan-rasmi-08.example/portal"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "semakan-rasmi-08.example",
+        "value_norm": "semakan-rasmi-08.example"
+      }
+    ],
+    "redteam_callback_recon": [
+      {
+        "entity_type": "PHONE",
+        "value": "015-3409 4317",
+        "value_norm": "+601534094317"
+      }
+    ],
+    "legit_bank_fraud_callback": [
+      {
+        "entity_type": "PHONE",
+        "value": "013-3701 8113",
+        "value_norm": "+601337018113"
+      }
+    ],
+    "legit_otp_awareness": [],
+    "legit_courier_redelivery": [],
+    "legit_insurance_renewal": [],
+    "legit_telco_billing": [],
+    "legit_govt_survey": [],
+    "noise_phishing_001": [
+      {
+        "entity_type": "URL",
+        "value": "https://ewallet-hadiah.example/tuntut",
+        "value_norm": "ewallet-hadiah.example/tuntut"
+      },
+      {
+        "entity_type": "DOMAIN",
+        "value": "ewallet-hadiah.example",
+        "value_norm": "ewallet-hadiah.example"
+      }
+    ],
+    "noise_investment_001": [
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3901-3703-1307-0801",
+        "value_norm": "3901370313070801"
+      }
+    ],
+    "noise_romance_001": [
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3902-3706-1314-0802",
+        "value_norm": "3902370613140802"
+      }
+    ],
+    "noise_job_offer_001": [
+      {
+        "entity_type": "ACCOUNT",
+        "value": "3903-3709-1321-0803",
+        "value_norm": "3903370913210803"
+      }
+    ]
+  }
+}

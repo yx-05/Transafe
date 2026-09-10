@@ -1,0 +1,51 @@
+{
+  "$comment": [
+    "TranSafe MCP gateway — stdio connection config for CodeBuddy / Claude Desktop.",
+    "Copy the 'mcpServers' block into your client config, replacing <ABS_PATH> with the",
+    "absolute path to this repository's backend/ directory.",
+    "",
+    "TRANSAFE_ROLE is the process-level entitlement CEILING. A tools/call argument may",
+    "name a NARROWER role (useful for previewing redaction), but never a broader one.",
+    "Launching with 'public' and asking for 'fraud_ops' gets you 'public'.",
+    "",
+    "Valid roles: fraud_ops, compliance, customer_service, legal, auditor, analyst,",
+    "partner_bank, external_researcher, public. Anything else is treated as public.",
+    "",
+    "Every call — success, denial, rate limit, error — is written to mcp_access_log and",
+    "emitted as an exposure/mcp_call ns_event, visible live on console Screen G."
+  ],
+  "mcpServers": {
+    "transafe": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "mcp.server"],
+      "cwd": "<ABS_PATH>/backend",
+      "env": {
+        "TRANSAFE_CALLER": "codebuddy",
+        "TRANSAFE_ROLE": "fraud_ops",
+        "TRANSAFE_LOG_LEVEL": "INFO",
+        "SUPABASE_URL": "${SUPABASE_URL}",
+        "SUPABASE_SERVICE_KEY": "${SUPABASE_SERVICE_KEY}",
+        "DEEPSEEK_API_KEY": "${DEEPSEEK_API_KEY}"
+      },
+      "transport": "stdio",
+      "description": "TranSafe fraud intelligence — role-redacted campaigns, cases, indicators and defense artifacts.",
+      "tools": [
+        "ask_transafe",
+        "list_active_campaigns",
+        "get_campaign",
+        "get_case_evidence",
+        "get_artifact",
+        "check_indicator",
+        "query_stats",
+        "query_mcp_log"
+      ],
+      "toolAliases": {
+        "query_campaign": "get_campaign",
+        "query_case": "get_case_evidence",
+        "query_artifact": "get_artifact",
+        "query_campaigns": "list_active_campaigns",
+        "query_indicator": "check_indicator"
+      }
+    }
+  }
+}

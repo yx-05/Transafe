@@ -1,0 +1,385 @@
+[
+  {
+    "id": 1,
+    "ts": "2026-09-10T12:04:11.400Z",
+    "layer": "case",
+    "event_type": "case_ingested",
+    "severity": "info",
+    "payload": {
+      "act": "I_sensing",
+      "case_id": "3ebd7f3d-ac07-5a25-aa72-c2160d222724",
+      "case_number": 40,
+      "channel": "voice"
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 2,
+    "ts": "2026-09-10T12:04:11.800Z",
+    "layer": "case",
+    "event_type": "mo_extracted",
+    "severity": "info",
+    "payload": {
+      "act": "I_sensing",
+      "case_id": "3ebd7f3d-ac07-5a25-aa72-c2160d222724",
+      "impersonated_entity": "bank negara malaysia",
+      "script_phases": [
+        "account_compromise_claim",
+        "authority_intro",
+        "credential_harvest",
+        "isolation_instruction",
+        "safe_account_transfer",
+        "verification_evasion"
+      ]
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 3,
+    "ts": "2026-09-10T12:04:12.000Z",
+    "layer": "case",
+    "event_type": "entity_linked",
+    "severity": "info",
+    "payload": {
+      "act": "I_sensing",
+      "case_id": "3ebd7f3d-ac07-5a25-aa72-c2160d222724",
+      "entity_type": "ACCOUNT",
+      "value_norm": "1592345678901234"
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 4,
+    "ts": "2026-09-10T12:04:12.600Z",
+    "layer": "case",
+    "event_type": "case_ingested",
+    "severity": "info",
+    "payload": {
+      "act": "I_sensing",
+      "case_id": "587e7f5b-d296-5658-b7e3-1792a903df5d",
+      "case_number": 41,
+      "channel": "voice"
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 5,
+    "ts": "2026-09-10T12:04:13.000Z",
+    "layer": "case",
+    "event_type": "mo_extracted",
+    "severity": "info",
+    "payload": {
+      "act": "I_sensing",
+      "case_id": "587e7f5b-d296-5658-b7e3-1792a903df5d",
+      "impersonated_entity": "bank negara malaysia",
+      "script_phases": [
+        "account_compromise_claim",
+        "authority_intro",
+        "credential_harvest",
+        "isolation_instruction",
+        "safe_account_transfer",
+        "verification_evasion"
+      ]
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 6,
+    "ts": "2026-09-10T12:04:13.200Z",
+    "layer": "case",
+    "event_type": "entity_linked",
+    "severity": "info",
+    "payload": {
+      "act": "I_sensing",
+      "case_id": "587e7f5b-d296-5658-b7e3-1792a903df5d",
+      "entity_type": "ACCOUNT",
+      "value_norm": "1592345678901234"
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 7,
+    "ts": "2026-09-10T12:04:13.800Z",
+    "layer": "case",
+    "event_type": "case_ingested",
+    "severity": "info",
+    "payload": {
+      "act": "I_sensing",
+      "case_id": "e7c78c9b-f05f-517d-ae5f-95ba4ca487c9",
+      "case_number": 42,
+      "channel": "voice"
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 8,
+    "ts": "2026-09-10T12:04:14.200Z",
+    "layer": "case",
+    "event_type": "mo_extracted",
+    "severity": "info",
+    "payload": {
+      "act": "I_sensing",
+      "case_id": "e7c78c9b-f05f-517d-ae5f-95ba4ca487c9",
+      "impersonated_entity": "bank negara malaysia",
+      "script_phases": [
+        "account_compromise_claim",
+        "authority_intro",
+        "credential_harvest",
+        "isolation_instruction",
+        "safe_account_transfer",
+        "verification_evasion"
+      ]
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 9,
+    "ts": "2026-09-10T12:04:14.400Z",
+    "layer": "case",
+    "event_type": "entity_linked",
+    "severity": "info",
+    "payload": {
+      "act": "I_sensing",
+      "case_id": "e7c78c9b-f05f-517d-ae5f-95ba4ca487c9",
+      "entity_type": "ACCOUNT",
+      "value_norm": "1592345678901234"
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 10,
+    "ts": "2026-09-10T12:04:15.600Z",
+    "layer": "discovery",
+    "event_type": "case_observed",
+    "severity": "info",
+    "payload": {
+      "act": "II_discovery",
+      "case_id": "e7c78c9b-f05f-517d-ae5f-95ba4ca487c9",
+      "candidates": 4
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 11,
+    "ts": "2026-09-10T12:04:16.100Z",
+    "layer": "discovery",
+    "event_type": "cases_linked",
+    "severity": "info",
+    "payload": {
+      "act": "II_discovery",
+      "case_a": "3ebd7f3d-ac07-5a25-aa72-c2160d222724",
+      "case_b": "587e7f5b-d296-5658-b7e3-1792a903df5d",
+      "score": 0.95,
+      "signal": "shared_identifier"
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 12,
+    "ts": "2026-09-10T12:04:16.600Z",
+    "layer": "discovery",
+    "event_type": "cases_linked",
+    "severity": "info",
+    "payload": {
+      "act": "II_discovery",
+      "case_a": "e7c78c9b-f05f-517d-ae5f-95ba4ca487c9",
+      "case_b": "8908297b-70f1-516c-bfc1-a75ab7bb9cb7",
+      "score": 0.95,
+      "signal": "shared_identifier"
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 13,
+    "ts": "2026-09-10T12:04:17.200Z",
+    "layer": "discovery",
+    "event_type": "cases_linked",
+    "severity": "warning",
+    "payload": {
+      "act": "II_discovery",
+      "case_a": "d15a7b93-27e2-5c6f-b0e2-c3e5d4ae44ed",
+      "case_b": "c3fce8bf-c3df-52c3-8b2a-f5b31c2387c6",
+      "score": 0.95,
+      "signal": "shared_identifier"
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 14,
+    "ts": "2026-09-10T12:04:17.900Z",
+    "layer": "discovery",
+    "event_type": "campaign_proposed",
+    "severity": "critical",
+    "payload": {
+      "act": "II_discovery",
+      "campaign_code": "SCAM-027",
+      "case_count": 6,
+      "distinct_customers": 6,
+      "confidence": 0.91,
+      "novel": true
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 15,
+    "ts": "2026-09-10T12:04:22.000Z",
+    "layer": "discovery",
+    "event_type": "campaign_approved",
+    "severity": "info",
+    "payload": {
+      "act": "III_validation",
+      "campaign_code": "SCAM-027",
+      "approved_by": "fraud_ops_analyst"
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 16,
+    "ts": "2026-09-10T12:04:23.000Z",
+    "layer": "compiler",
+    "event_type": "compilation_completed",
+    "severity": "info",
+    "payload": {
+      "act": "IV_compile",
+      "campaign_code": "SCAM-027",
+      "artifacts": 3,
+      "tier": "pack"
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 17,
+    "ts": "2026-09-10T12:04:23.600Z",
+    "layer": "compiler",
+    "event_type": "core_patch_proposed",
+    "severity": "warning",
+    "payload": {
+      "act": "IV_compile",
+      "rule_id": "R-CORE-014",
+      "source_campaigns": [
+        "SCAM-019",
+        "SCAM-024",
+        "SCAM-027"
+      ],
+      "confidence": 0.86
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 18,
+    "ts": "2026-09-10T12:04:24.200Z",
+    "layer": "registry",
+    "event_type": "artifact_published",
+    "severity": "info",
+    "payload": {
+      "act": "IV_compile",
+      "name": "SCAM-027.json",
+      "tier": "pack",
+      "version": 1
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 19,
+    "ts": "2026-09-10T12:04:24.800Z",
+    "layer": "registry",
+    "event_type": "core_artifact_published",
+    "severity": "info",
+    "payload": {
+      "act": "IV_compile",
+      "name": "phone_agent_core",
+      "tier": "core",
+      "from_version": 6,
+      "version": 7
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 20,
+    "ts": "2026-09-10T12:04:25.300Z",
+    "layer": "propagation",
+    "event_type": "propagation_acknowledged",
+    "severity": "info",
+    "payload": {
+      "act": "IV_compile",
+      "agent": "phone_agent",
+      "agent_name": "phone_agent",
+      "artifact_name": "phone_agent_core",
+      "version": 7
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 21,
+    "ts": "2026-09-10T12:04:25.500Z",
+    "layer": "propagation",
+    "event_type": "propagation_acknowledged",
+    "severity": "info",
+    "payload": {
+      "act": "IV_compile",
+      "agent": "fraud_ops",
+      "agent_name": "fraud_ops",
+      "artifact_name": "phone_agent_core",
+      "version": 7
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 22,
+    "ts": "2026-09-10T12:04:25.700Z",
+    "layer": "propagation",
+    "event_type": "propagation_acknowledged",
+    "severity": "info",
+    "payload": {
+      "act": "IV_compile",
+      "agent": "phishing_agent",
+      "agent_name": "phishing_agent",
+      "artifact_name": "phone_agent_core",
+      "version": 7
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 23,
+    "ts": "2026-09-10T12:04:25.900Z",
+    "layer": "propagation",
+    "event_type": "propagation_acknowledged",
+    "severity": "info",
+    "payload": {
+      "act": "IV_compile",
+      "agent": "txn_monitor",
+      "agent_name": "txn_monitor",
+      "artifact_name": "phone_agent_core",
+      "version": 7
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 24,
+    "ts": "2026-09-10T12:04:28.000Z",
+    "layer": "exposure",
+    "event_type": "mcp_call",
+    "severity": "info",
+    "payload": {
+      "act": "V_proof",
+      "caller": "codebuddy",
+      "tool": "ask_transafe",
+      "role": "legal",
+      "latency_ms": 340
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  },
+  {
+    "id": 25,
+    "ts": "2026-09-10T12:04:29.500Z",
+    "layer": "registry",
+    "event_type": "eval_completed",
+    "severity": "info",
+    "payload": {
+      "act": "V_proof",
+      "label": "replay: post-adaptation",
+      "note": "numbers rendered by the console come from a live eval run, not this replay"
+    },
+    "run_id": "112cb99b-5bf9-569e-93d0-d5d597cf0568"
+  }
+]

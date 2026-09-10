@@ -14,6 +14,9 @@ from fastapi.responses import JSONResponse
 from src.agents.graph import compile_graph
 from src.api.admin import router as admin_router
 from src.api.auth import router as auth_router
+from src.api.enterprise import router as enterprise_router
+from src.api.enterprise_demo import router as enterprise_demo_router
+from src.api.enterprise_ws import enterprise_ws_router
 from src.api.triggers import router as triggers_router
 from src.api.websocket import websocket_router
 from src.api.websocket_call import call_ws_router
@@ -102,6 +105,11 @@ app.include_router(triggers_router, prefix="/api/v1")
 app.include_router(websocket_router)
 app.include_router(call_ws_router)
 app.include_router(admin_router)
+
+# ── v2 Enterprise layer (additive; no v1 route is modified) ──────────────────
+app.include_router(enterprise_router)
+app.include_router(enterprise_ws_router)
+app.include_router(enterprise_demo_router)
 
 
 if __name__ == "__main__":

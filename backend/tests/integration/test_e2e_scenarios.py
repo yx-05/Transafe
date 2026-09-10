@@ -29,11 +29,14 @@ ADMIN_HEADERS = {"X-Admin-Key": ADMIN_KEY}
 # Scenario 1: High-Risk Mule Transaction Interception (PRD §3.1 & Agent Flow §6.1)
 # ============================================================================
 @pytest.mark.asyncio
+@patch("src.api.triggers.insert_transaction")
+@patch("src.agents.orchestrator.fetch_case_context")
+@patch("src.agents.graph_nodes.resolve_transaction_uuid")
 @patch("src.agents.workers.financial.fetch_user_transaction_history")
 @patch("src.agents.workers.financial.llm")
 @patch("src.agents.workers.telemetry.fetch_telemetry_events")
 @patch("src.agents.workers.research.search_fraud_memory")
-@patch("src.agents.graph_nodes.Groq")
+@patch("src.agents.llm.invoke_groq_with_key_rotation")
 @patch("src.agents.graph_nodes.insert_fraud_case")
 @patch("src.db.supabase.update_transaction_status")
 @patch("src.agents.graph_nodes.insert_admin_alert")
@@ -41,11 +44,14 @@ async def test_prd_scenario1_transaction_interception(
     mock_admin_alert,
     mock_tx_update,
     mock_insert_case,
-    mock_groq_cls,
+    mock_xai_invoke,
     mock_search_memory,
     mock_fetch_telemetry,
     mock_financial_llm,
     mock_tx_history,
+    mock_resolve_tx_uuid,
+    mock_fetch_case_context,
+    mock_insert_transaction,
 ):
     """PRD Scenario 1: High-risk transaction to anomalous account is flagged and frozen."""
     mock_insert_case.return_value = "case-prd-101"
@@ -62,11 +68,25 @@ async def test_prd_scenario1_transaction_interception(
     mock_fin_resp.content = '{"score": 92, "confidence": 0.9, "evidence": ["Recipient account matches scam report", "Large deviation from MYR 150 baseline"]}'
     mock_financial_llm.invoke.return_value = mock_fin_resp
 
-    mock_xai_groq = MagicMock()
-    mock_choice = MagicMock()
-    mock_choice.message.content = '{"verdict_summary": "High risk fraud detected", "verdict_summary_ms": "Penipuan berisiko tinggi dikesan", "recommendation": "Freeze transaction"}'
-    mock_xai_groq.chat.completions.create.return_value.choices = [mock_choice]
-    mock_groq_cls.return_value = mock_xai_groq
+    # Keep this test fully offline: the REST trigger persists to the v1
+    # `transactions` table, and the action dispatcher resolves the tx UUID.
+    # Both swallow their exceptions, so leaving them unpatched would let the
+    # test pass while silently talking to the live shared instance.
+    mock_insert_transaction.return_value = None
+    mock_resolve_tx_uuid.return_value = None
+    # The payload carries associated_case_id, which sends orchestrator_node
+    # (orchestrator.py:37) into a live fetch_case_context read.
+    mock_fetch_case_context.return_value = None
+
+    # xai_node lazily does `from src.agents.llm import invoke_groq_with_key_rotation`
+    # *inside* the function (graph_nodes.py:186), so the patch has to land on the
+    # source module under that exact alias — graph_nodes never holds the symbol,
+    # and patching `invoke_deepseek_with_key_rotation` would miss because the
+    # alias at llm.py:196 was bound at definition time. It returns a LangChain
+    # message, so the mock exposes `.content`, not an OpenAI `.choices` chain.
+    mock_xai_response = MagicMock()
+    mock_xai_response.content = '{"verdict_summary": "High risk fraud detected", "verdict_summary_ms": "Penipuan berisiko tinggi dikesan", "recommendation": "Freeze transaction"}'
+    mock_xai_invoke.return_value = mock_xai_response
 
     # Trigger transaction via REST API
     payload = {
@@ -107,6 +127,17 @@ async def test_prd_scenario1_transaction_interception(
     assert final_state["risk_tier"] in ["MEDIUM", "HIGH"]
     assert final_state["action_taken"] in ["FREEZE_30_MIN", "BIOMETRIC_CHALLENGE"]
     assert final_state["xai_report"] is not None
+    # xai_node (graph_nodes.py:184-195) wraps the LLM call in a bare
+    # `except Exception` and falls back to a canned template, so
+    # `xai_report is not None` stays true even when the patch target is wrong.
+    # Assert the mocked verdict actually reached the report, otherwise this
+    # test would go green while exercising nothing.
+    mock_xai_invoke.assert_called_once()
+    assert final_state["xai_report"]["verdict_summary"] == "High risk fraud detected"
+    assert (
+        final_state["xai_report"]["verdict_summary_ms"]
+        == "Penipuan berisiko tinggi dikesan"
+    )
     if final_state["action_taken"] == "FREEZE_30_MIN":
         mock_tx_update.assert_called_once()
 
@@ -154,18 +185,18 @@ def test_prd_scenario2_phone_impersonation_call(mock_phone_llm):
 # ============================================================================
 # Scenario 3: Screenshot & Phishing Link Investigation (PRD §3.3 & Agent Flow §6.3)
 # ============================================================================
-@patch("src.services.vision._get_groq_client")
+@patch("src.services.vision._get_deepseek_client")
 @patch("src.services.tavily.TavilyClient")
 @patch("src.agents.workers.phishing.llm")
 def test_prd_scenario3_phishing_investigation(
-    mock_phishing_llm, mock_tavily_cls, mock_groq_client
+    mock_phishing_llm, mock_tavily_cls, mock_vision_client
 ):
     """PRD Scenario 3: OCR extracts phishing text, Phishing Worker extracts entities, Research Worker cross-checks."""
     mock_vision_choice = MagicMock()
     mock_vision_choice.message.content = (
         "URGENT: Maybank account locked. Verify now at http://maybank-secure-update.xyz"
     )
-    mock_groq_client.chat.completions.create.return_value.choices = [
+    mock_vision_client.return_value.chat.completions.create.return_value.choices = [
         mock_vision_choice
     ]
 

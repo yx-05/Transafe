@@ -1,0 +1,61 @@
+{
+  "case_id": "legit_otp_awareness",
+  "category": "noise",
+  "is_scam": false,
+  "other_scam_family": false,
+  "campaign": null,
+  "variant_note": "genuine bank security-awareness call, asks for nothing",
+  "created_at": "2026-09-10T21:00:00Z",
+  "transcript": [
+    {
+      "seq_idx": 0,
+      "speaker": "CALLER",
+      "utterance": "Hello, this is a security awareness call from your bank.",
+      "risk_score": 12
+    },
+    {
+      "seq_idx": 1,
+      "speaker": "USER",
+      "utterance": "Okay.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 2,
+      "speaker": "CALLER",
+      "utterance": "Mr Mei Ling, we are reminding customers never to share a one-time code with anyone, including staff.",
+      "risk_score": 15
+    },
+    {
+      "seq_idx": 3,
+      "speaker": "USER",
+      "utterance": "Understood.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 4,
+      "speaker": "CALLER",
+      "utterance": "We are not asking you for any code today, and there is no action needed on your account.",
+      "risk_score": 8
+    },
+    {
+      "seq_idx": 5,
+      "speaker": "CALLER",
+      "utterance": "If anyone calls claiming your account is under investigation, please hang up and contact us directly.",
+      "risk_score": 10
+    },
+    {
+      "seq_idx": 6,
+      "speaker": "USER",
+      "utterance": "Thanks for the reminder.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 7,
+      "speaker": "CALLER",
+      "utterance": "Have a good day.",
+      "risk_score": 5
+    }
+  ],
+  "expected_mo": null,
+  "expected_entities": []
+}

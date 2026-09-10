@@ -1,0 +1,92 @@
+{
+  "case_id": "redteam_callback_recon",
+  "category": "redteam",
+  "is_scam": true,
+  "campaign": "SCAM-027",
+  "variant_note": "reconnaissance only: no money ask, no isolation, no phrase",
+  "created_at": "2026-09-09T15:00:00Z",
+  "transcript": [
+    {
+      "seq_idx": 0,
+      "speaker": "CALLER",
+      "utterance": "Selamat pagi, saya Officer Suhaimi dari Bank Negara Malaysia, unit siasatan.",
+      "risk_score": 30
+    },
+    {
+      "seq_idx": 1,
+      "speaker": "USER",
+      "utterance": "Ya? Saya tak pernah terima panggilan macam ini sebelum ini.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 2,
+      "speaker": "CALLER",
+      "utterance": "Encik Farah, rekod kami menunjukkan akaun encik telah dikaitkan dengan kes pengubahan wang haram.",
+      "risk_score": 60
+    },
+    {
+      "seq_idx": 3,
+      "speaker": "USER",
+      "utterance": "Apa? Saya tidak pernah terlibat dengan perkara seperti itu.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 4,
+      "speaker": "CALLER",
+      "utterance": "Kes ini serius. Waran tangkap boleh dikeluarkan jika encik tidak bekerjasama sekarang juga.",
+      "risk_score": 78
+    },
+    {
+      "seq_idx": 5,
+      "speaker": "USER",
+      "utterance": "Saya betul-betul tidak faham apa yang berlaku.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 6,
+      "speaker": "USER",
+      "utterance": "Saya rasa tidak sedap hati dengan panggilan ini.",
+      "risk_score": 10
+    },
+    {
+      "seq_idx": 7,
+      "speaker": "CALLER",
+      "utterance": "Encik boleh hubungi saya semula di 015-3409 4317 jika talian terputus. Jangan letak telefon sekarang.",
+      "risk_score": 88
+    },
+    {
+      "seq_idx": 8,
+      "speaker": "AI_AGENT",
+      "utterance": "Amaran: pemanggil meminta pemindahan wang ke akaun pihak ketiga dan melarang anda menghubungi bank. Ini corak penipuan pegawai palsu.",
+      "risk_score": 95
+    },
+    {
+      "seq_idx": 9,
+      "speaker": "USER",
+      "utterance": "Baik, saya akan letak telefon.",
+      "risk_score": 5
+    }
+  ],
+  "expected_mo": {
+    "impersonated_entity": "bank negara malaysia",
+    "script_phases": [
+      "authority_intro",
+      "account_compromise_claim",
+      "isolation_instruction",
+      "safe_account_transfer",
+      "verification_evasion"
+    ],
+    "pressure_tactics": [
+      "urgency",
+      "fear_of_arrest",
+      "secrecy"
+    ]
+  },
+  "expected_entities": [
+    {
+      "entity_type": "PHONE",
+      "value": "015-3409 4317",
+      "value_norm": "+601534094317"
+    }
+  ]
+}

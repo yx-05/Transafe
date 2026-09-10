@@ -331,17 +331,22 @@ async def test_action_dispatcher_phishing_case_logging(
 
 
 @pytest.mark.asyncio
-@patch("src.agents.graph_nodes.Groq")
+@patch("src.agents.llm.invoke_groq_with_key_rotation", new_callable=MagicMock)
 @patch("src.agents.graph_nodes.resolve_transaction_uuid", new_callable=Mock)
 @patch("src.agents.graph_nodes.insert_fraud_case", new_callable=Mock)
 async def test_full_graph_execution_mocked(
     mock_insert_case: Mock,
     mock_resolve_tx: Mock,
-    mock_groq: Any,
+    mock_llm: Any,
 ) -> None:
     """Test full compiled graph execution with mocked LLM and DB calls."""
     mock_insert_case.return_value = "case-test-full-graph"
     mock_resolve_tx.return_value = None
+    mock_llm.return_value = Mock(content=json.dumps({
+        "verdict_summary": "Transaction appears normal.",
+        "verdict_summary_ms": "Transaksi ini kelihatan normal.",
+        "recommendation": "Proceed with monitoring.",
+    }))
 
     compiled_graph = compile_graph()
 
@@ -367,7 +372,6 @@ async def test_full_graph_execution_mocked(
 
 
 @pytest.mark.asyncio
-@patch("src.agents.graph_nodes.Groq")
 @patch("src.agents.graph_nodes.insert_fraud_case", new_callable=Mock)
 @patch("src.agents.graph_nodes.insert_phishing_submission", new_callable=Mock)
 @patch("src.agents.workers.phishing.analyze_image", new_callable=MagicMock)
@@ -385,7 +389,6 @@ async def test_full_graph_phishing_image_high_risk(
     mock_analyze_image: MagicMock,
     mock_insert_submission: Mock,
     mock_insert_case: Mock,
-    mock_groq: Any,
 ) -> None:
     """PHISHING IMAGE trigger runs phishing (Stage 1) then research (Stage 2) and lands HIGH/WARNING.
 

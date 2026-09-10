@@ -215,7 +215,7 @@ async def trigger_call(
     )
     registered_call = session_store.get_call(call_session_id)
     if registered_call:
-        engine_val = getattr(payload.call, "stt_engine", None) or "groq"
+        engine_val = getattr(payload.call, "stt_engine", None) or "dashscope"
         registered_call["stt_engine"] = str(engine_val)
 
     precheck = run_call_precheck(payload.call.caller_number)

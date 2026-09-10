@@ -1,0 +1,49 @@
+{
+  "case_id": "legit_telco_billing",
+  "category": "noise",
+  "is_scam": false,
+  "other_scam_family": false,
+  "campaign": null,
+  "variant_note": "genuine telco plan downgrade offer",
+  "created_at": "2026-09-12T09:00:00Z",
+  "transcript": [
+    {
+      "seq_idx": 0,
+      "speaker": "CALLER",
+      "utterance": "Hello, this is your mobile provider calling about your billing plan.",
+      "risk_score": 8
+    },
+    {
+      "seq_idx": 1,
+      "speaker": "USER",
+      "utterance": "Okay, what about it?",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 2,
+      "speaker": "CALLER",
+      "utterance": "Mr Hafiz, your current plan is RM 98 a month and a cheaper plan is now available.",
+      "risk_score": 8
+    },
+    {
+      "seq_idx": 3,
+      "speaker": "USER",
+      "utterance": "Send me the details.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 4,
+      "speaker": "CALLER",
+      "utterance": "I will send it to your registered email. No payment or code is needed for this call.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 5,
+      "speaker": "USER",
+      "utterance": "Fine, thanks.",
+      "risk_score": 5
+    }
+  ],
+  "expected_mo": null,
+  "expected_entities": []
+}

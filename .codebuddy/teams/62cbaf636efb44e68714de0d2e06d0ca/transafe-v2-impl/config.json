@@ -1,0 +1,56 @@
+{
+  "name": "transafe-v2-impl",
+  "mainConversationId": "62cbaf636efb44e68714de0d2e06d0ca",
+  "workspacePath": "/Users/Admin/Documents/GitHub/Transafe",
+  "createdAt": "2026-09-10T06:38:19.145Z",
+  "options": {
+    "workspacePath": "/Users/Admin/Documents/GitHub/Transafe"
+  },
+  "isAutoTeam": false,
+  "validMembers": [
+    {
+      "memberId": "backend-core@transafe-v2-impl",
+      "name": "backend-core",
+      "role": "Backend core B0-B2",
+      "sessionId": "a1ac32ecada743a6acae2b5eabc8d1f3"
+    },
+    {
+      "memberId": "frontend@transafe-v2-impl",
+      "name": "frontend",
+      "role": "Enterprise console frontend",
+      "sessionId": "b0686332840c4f4cb3a87b74aa82a42c"
+    },
+    {
+      "memberId": "backend-artifacts@transafe-v2-impl",
+      "name": "backend-artifacts",
+      "role": "Artifact compiler registry propagation",
+      "sessionId": "93edcdc82b324bed967330d908c53fba"
+    },
+    {
+      "memberId": "eval-demo@transafe-v2-impl",
+      "name": "eval-demo",
+      "role": "Eval harness seeds demo controller",
+      "sessionId": "6148b5b580e541ad932252afb36cbe7e"
+    }
+  ],
+  "members": [
+    {
+      "memberId": "backend-artifacts@transafe-v2-impl",
+      "name": "backend-artifacts",
+      "role": "Add campaign reject endpoint",
+      "sessionId": "b2f6482d978a47b1903b1be0b1dd77e6"
+    },
+    {
+      "memberId": "eval-demo@transafe-v2-impl",
+      "name": "eval-demo",
+      "role": "Eval harness seeds demo controller",
+      "sessionId": "f33362f61c6a4572ab2b463971c621f3"
+    },
+    {
+      "memberId": "mcp-liaison@transafe-v2-impl",
+      "name": "mcp-liaison",
+      "role": "MCP gateway liaison redaction",
+      "sessionId": "76221f46a46b45899d935a52ff987150"
+    }
+  ]
+}

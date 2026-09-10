@@ -1,0 +1,167 @@
+{
+  "case_id": "scam027_variant_012",
+  "category": "base",
+  "is_scam": true,
+  "campaign": "SCAM-027",
+  "variant_note": "identifiers fully rotated; signature phrase retained",
+  "created_at": "2026-09-04T03:00:00Z",
+  "transcript": [
+    {
+      "seq_idx": 0,
+      "speaker": "CALLER",
+      "utterance": "Selamat pagi, saya Pegawai Suhaimi dari Bank Negara Malaysia, unit siasatan.",
+      "risk_score": 30
+    },
+    {
+      "seq_idx": 1,
+      "speaker": "USER",
+      "utterance": "Ya? Saya tak pernah terima panggilan macam ini sebelum ini.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 2,
+      "speaker": "CALLER",
+      "utterance": "Encik Yee, rekod kami menunjukkan akaun encik telah dikaitkan dengan kes pengubahan wang haram.",
+      "risk_score": 60
+    },
+    {
+      "seq_idx": 3,
+      "speaker": "USER",
+      "utterance": "Apa? Saya tidak pernah terlibat dengan perkara seperti itu.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 4,
+      "speaker": "CALLER",
+      "utterance": "Kes ini serius. Waran tangkap boleh dikeluarkan jika encik tidak bekerjasama sekarang juga.",
+      "risk_score": 78
+    },
+    {
+      "seq_idx": 5,
+      "speaker": "USER",
+      "utterance": "Saya betul-betul tidak faham apa yang berlaku.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 6,
+      "speaker": "CALLER",
+      "utterance": "Encik jangan beritahu sesiapa tentang panggilan ini. Siasatan ini sulit di bawah akta.",
+      "risk_score": 85
+    },
+    {
+      "seq_idx": 7,
+      "speaker": "USER",
+      "utterance": "Saya nak berbincang dengan isteri saya dahulu.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 8,
+      "speaker": "USER",
+      "utterance": "Boleh saya telefon bank saya untuk sahkan?",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 9,
+      "speaker": "CALLER",
+      "utterance": "Jangan hubungi bank encik. Cawangan mungkin terlibat dalam sindiket ini. Kekal di talian dengan saya.",
+      "risk_score": 90
+    },
+    {
+      "seq_idx": 10,
+      "speaker": "CALLER",
+      "utterance": "Kami akan pindahkan dana encik ke akaun selamat sementara di bawah kawalan kami.",
+      "risk_score": 92
+    },
+    {
+      "seq_idx": 11,
+      "speaker": "USER",
+      "utterance": "Akaun apa itu? Saya tidak pernah dengar.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 12,
+      "speaker": "CALLER",
+      "utterance": "Sila pindahkan RM 12,000 ke akaun 3311-1933-6177-0211 atas nama unit amanah kami dalam masa tiga puluh minit.",
+      "risk_score": 95
+    },
+    {
+      "seq_idx": 13,
+      "speaker": "USER",
+      "utterance": "Kenapa perlu secepat itu?",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 14,
+      "speaker": "CALLER",
+      "utterance": "Selepas tempoh itu seluruh akaun encik akan dibekukan oleh sistem.",
+      "risk_score": 90
+    },
+    {
+      "seq_idx": 15,
+      "speaker": "CALLER",
+      "utterance": "Selepas pemindahan, sahkan di https://akaun-semak-11.example/pengesahan dan masukkan nombor TAC yang encik terima.",
+      "risk_score": 93
+    },
+    {
+      "seq_idx": 16,
+      "speaker": "USER",
+      "utterance": "Saya rasa tidak sedap hati dengan panggilan ini.",
+      "risk_score": 10
+    },
+    {
+      "seq_idx": 17,
+      "speaker": "CALLER",
+      "utterance": "Encik boleh hubungi saya semula di 013-3211 6743 jika talian terputus. Jangan letak telefon sekarang.",
+      "risk_score": 88
+    },
+    {
+      "seq_idx": 18,
+      "speaker": "AI_AGENT",
+      "utterance": "Amaran: pemanggil meminta pemindahan wang ke akaun pihak ketiga dan melarang anda menghubungi bank. Ini corak penipuan pegawai palsu.",
+      "risk_score": 95
+    },
+    {
+      "seq_idx": 19,
+      "speaker": "USER",
+      "utterance": "Baik, saya akan letak telefon.",
+      "risk_score": 5
+    }
+  ],
+  "expected_mo": {
+    "impersonated_entity": "bank negara malaysia",
+    "script_phases": [
+      "authority_intro",
+      "account_compromise_claim",
+      "isolation_instruction",
+      "safe_account_transfer",
+      "verification_evasion"
+    ],
+    "pressure_tactics": [
+      "urgency",
+      "fear_of_arrest",
+      "secrecy"
+    ]
+  },
+  "expected_entities": [
+    {
+      "entity_type": "PHONE",
+      "value": "013-3211 6743",
+      "value_norm": "+601332116743"
+    },
+    {
+      "entity_type": "ACCOUNT",
+      "value": "3311-1933-6177-0211",
+      "value_norm": "3311193361770211"
+    },
+    {
+      "entity_type": "URL",
+      "value": "https://akaun-semak-11.example/pengesahan",
+      "value_norm": "akaun-semak-11.example/pengesahan"
+    },
+    {
+      "entity_type": "DOMAIN",
+      "value": "akaun-semak-11.example",
+      "value_norm": "akaun-semak-11.example"
+    }
+  ]
+}
