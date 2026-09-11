@@ -49,6 +49,7 @@ from src.enterprise.evaluation import (
     STRUCTURAL_RULE,
     _ground_truth_for,
     _load_corpus,
+    _store_eval_run,
     parse_core_rules,
     run_evaluation,
 )
@@ -123,6 +124,14 @@ async def run_adaptation_loop(
         core_content=base_content,
         core_version=base_version,
         use_llm=use_llm,
+        # NOT persisted yet. A cycle can end here — no misses, no invariant, or
+        # a proposal below threshold — and a lone "before adaptation" row would
+        # then be the newest in ``eval_runs``. ``/eval/latest`` pairs the two
+        # newest rows and calls the older one "before", so that orphan would be
+        # shown as the *after* side and invert the whole comparison. The run is
+        # stored below, immediately before the post run, so the table only ever
+        # contains complete pairs.
+        store=False,
         client=client,
     )
     missed_ids = _missed_ids(pre)
@@ -229,6 +238,11 @@ async def run_adaptation_loop(
         severity="info",
         run_id=cycle_id,
     )
+
+    # The cycle is committed to producing a post run, so the baseline can be
+    # persisted now. Order matters: the before row must be written first for
+    # ``/eval/latest`` to read it as the older of the pair.
+    _store_eval_run(pre, client=client)
 
     post = await run_evaluation(
         corpus_dir=root,
