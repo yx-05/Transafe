@@ -22,6 +22,11 @@ export function EvalPage() {
   // Results refresh when the harness emits eval_completed — never on a poll.
   // One adaptation cycle emits it twice (before and after), and the second
   // refresh is what reveals the jump, so both `running` flags clear on either.
+  //
+  // `demo_reset` belongs here too: a reset purges eval_runs. Without it, a reset
+  // made while this screen is open leaves the previous run's bars on screen, so
+  // the chart contradicts the pipeline — precisely what this screen is supposed
+  // to be trustworthy about.
   useEventSubscription(
     () => {
       void load().finally(() => {
@@ -29,7 +34,7 @@ export function EvalPage() {
         setAdapting(false);
       });
     },
-    { eventTypes: ["eval_completed"] },
+    { eventTypes: ["eval_completed", "demo_reset"] },
   );
 
   return (
