@@ -5,6 +5,16 @@
  * **discovery must run twice.** The first sweep does not promote. Encoding it
  * here means a future change that breaks the chain fails a test rather than
  * failing on stage.
+ *
+ * That rule is wrong, and the live system says so. Measured against the running
+ * pipeline, sweep **1** is the one that promotes — after a reseed the campaign
+ * is novel — and it emits `campaign_proposed` *before* its own
+ * `discovery_sweep_completed`. A sweep takes ~173 s and the reset before it
+ * ~24 s, so the old 180 s end-to-end budget expired mid-flight and the panel
+ * reported a timeout for a warm-up that had actually succeeded. The tests below
+ * pin the corrected ordering; the stale-proposal guard is now expressed as
+ * "this warm-up has seen its own sweep start", which holds regardless of how
+ * many sweeps turn out to be needed.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -96,6 +106,7 @@ describe("useDemoPrep", () => {
     await act(async () => {
       await result.current.startWarmup();
     });
+    act(() => emit("discovery_sweep_started"));
     act(() => emit("discovery_sweep_completed"));
     await waitFor(() => expect(result.current.stage).toBe("sweeping2"));
 
@@ -105,9 +116,29 @@ describe("useDemoPrep", () => {
     expect(result.current.busy).toBe(false);
   });
 
-  it("ignores a candidate proposed before the second sweep", async () => {
-    // A campaign left over from a previous run must not report the warm-up as
-    // finished before the sweep it is waiting for has even started.
+  it("is ready when the FIRST sweep proposes, without waiting for a second", async () => {
+    // Measured against the live system: after a reseed the campaign is novel,
+    // so sweep 1 emits `campaign_proposed` and only afterwards reports
+    // `discovery_sweep_completed`. Gating "ready" on the second sweep therefore
+    // never matched, and the chain always died on its timeout while the
+    // pipeline had in fact succeeded.
+    const { result } = renderHook(() => useDemoPrep());
+
+    await act(async () => {
+      await result.current.startWarmup();
+    });
+    act(() => emit("discovery_sweep_started"));
+    act(() => emit("campaign_proposed", "discovery"));
+
+    expect(result.current.stage).toBe("ready");
+    // The proposal is the finish line — no second sweep should be queued.
+    expect(discoverySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a candidate that arrives before this warm-up's own sweep starts", async () => {
+    // A campaign left over from a previous run can still be replayed out of the
+    // socket backlog on a reconnect. It must not report the warm-up as finished
+    // before the sweep it is waiting for has even started.
     const { result } = renderHook(() => useDemoPrep());
 
     await act(async () => {
