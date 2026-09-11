@@ -746,6 +746,145 @@ Then, **in the browser**:
 
 ---
 
+## Hosted deployment (Cloud Studio — free, China-accessible)
+
+The full system is deployed on Cloud Studio's Singapore region. The link is static and shareable — anyone with it can open the console in their browser.
+
+### What's hosted
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| **Frontend** (React SPA) | Hosted | Served as static files from `/static` via FastAPI |
+| **Backend** (FastAPI) | Hosted | All routers active on port 8000 |
+| **Supabase** (database) | Cloud | 127 cases, 3 campaigns, 539+ events — real data |
+| **MCP server** (stdio) | Available | Runs on the remote server via `python -m mcp.server` |
+| **Demo replay** | Working | `POST /enterprise/demo/scenario {mode:"replay"}` streams 25 events |
+
+### Accessing the hosted console
+
+The Cloud Studio URL is your shareable link. No login required. Multiple people can open it simultaneously — they all see the same live WebSocket stream.
+
+> **Sandbox sleep:** Cloud Studio free sandboxes sleep after ~30 minutes of inactivity. The first visitor after sleep wakes it up in ~10-15 seconds. Subsequent visits are instant.
+
+### API access from China
+
+| API | China accessible? | What happens |
+|-----|-------------------|--------------|
+| **DeepSeek** (LLM) | Yes (China-based) | Full LLM features work |
+| **DashScope** (embeddings + STT) | Yes (Alibaba Cloud) | Embeddings + Paraformer STT work |
+| **Supabase** (database) | May be slow | Works, just slower latency from China |
+| **Deepgram** (STT) | Blocked | System falls back to DashScope Paraformer |
+| **Tavily** (web search) | Blocked | System returns empty results (graceful) |
+| **ElevenLabs** (TTS) | Blocked | System falls back to edge-tts (Microsoft) |
+
+### Running the hosted demo
+
+Open the Cloud Studio URL in your browser. The console loads with real data already seeded (127 cases, 3 campaigns). To trigger the replay:
+
+```bash
+# From any terminal — replace <URL> with your Cloud Studio link
+curl -X POST <URL>/enterprise/demo/scenario \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"replay","speed":1}'
+```
+
+Or use the console's **RUN SCENARIO** button.
+
+### Connecting WorkBuddy to the hosted MCP server
+
+The MCP server uses **stdio transport** (JSON-RPC over stdin/stdout), which means it must run as a **local subprocess** launched by WorkBuddy. It cannot be called over HTTP.
+
+On the Cloud Studio server, the MCP server works — all 8 tools have been tested and return real data. But to use it from WorkBuddy on your machine, you have two options:
+
+#### Option A: SSH tunnel (recommended for full functionality)
+
+Set up an SSH tunnel from your machine to the Cloud Studio server, then launch the MCP server locally but with env vars pointing at the remote Supabase:
+
+1. Copy your `.env` to your local machine (it already has `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `DEEPSEEK_API_KEY`, `DASHSCOPE_API_KEY`).
+2. Point `~/.workbuddy-ai/mcp.json` at your local backend:
+
+```json
+{
+  "mcpServers": {
+    "transafe": {
+      "command": "/Users/Admin/Documents/GitHub/Transafe/backend/.venv/bin/python",
+      "args": ["-m", "mcp.server"],
+      "cwd": "/Users/Admin/Documents/GitHub/Transafe/backend",
+      "env": {
+        "TRANSAFE_CALLER": "workbuddy",
+        "TRANSAFE_ROLE": "compliance",
+        "TRANSAFE_LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}
+```
+
+3. The MCP server on your local machine connects to the same cloud Supabase — so it reads/writes the **same data** the hosted console shows. MCP calls appear live on the hosted console's MCP Log screen.
+
+#### Option B: Test the MCP server on the Cloud Studio server directly
+
+SSH into the Cloud Studio server and test the MCP server over stdio:
+
+```bash
+# Initialize + list tools
+printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n' \
+  | python -m mcp.server
+
+# Call query_stats (no args needed)
+printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query_stats","arguments":{}}}\n' \
+  | TRANSAFE_ROLE=compliance python -m mcp.server
+
+# Call ask_transafe (natural language query)
+printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ask_transafe","arguments":{"question":"Brief me on the currently active fraud campaigns"}}}\n' \
+  | TRANSAFE_ROLE=compliance TRANSAFE_CALLER=workbuddy python -m mcp.server
+```
+
+### MCP server test results (verified on Cloud Studio)
+
+All 8 tools tested and working against the hosted Supabase database:
+
+| Tool | Test input | Result |
+|------|-----------|--------|
+| `initialize` | JSON-RPC handshake | `protocolVersion: 2024-11-05`, server `transafe v2.0.0` |
+| `tools/list` | List all tools | 8 tools returned with full schemas |
+| `query_stats` | No args | 127 cases, 25 entities, 3 campaigns, 12 artifacts |
+| `list_active_campaigns` | No args | 3 campaigns: SCAM-027 (confidence 0.964), SCAM-024, SCAM-019 |
+| `get_campaign` | `campaign_id: "SCAM-027"` | Full campaign with cases, artifacts, indicators |
+| `check_indicator` | `PHONE +60112040713` | Known, linked to SCAM-024 (Fake Pos Malaysia) |
+| `ask_transafe` | "Brief me on active campaigns" | Answer with 9 citations, deterministic mode (no DEEPSEEK key on server) |
+| `query_mcp_log` | Default limit | 16 audit entries returned |
+| Role denial test | `TRANSAFE_ROLE=public` + `list_active_campaigns` | `{"error":"forbidden"}` — entitlement gate works |
+
+### MCP tool reference
+
+| Tool | Args | What it does | Min role |
+|------|------|-------------|----------|
+| `ask_transafe` | `question` (string) | Natural-language Q&A via Liaison Agent with cited answer | `aggregate` (all roles) |
+| `list_active_campaigns` | `status?` (string) | List APPROVED/ACTIVE campaigns | `campaign` |
+| `get_campaign` | `campaign_id` (string) | Full campaign details with cases + artifacts | `campaign` |
+| `get_case_evidence` | `case_id` (string) | Redacted evidence bundle for a case | `cases` |
+| `get_artifact` | `name` (string), `version?` (int) | Artifact content with diff to previous version | `artifacts` |
+| `check_indicator` | `indicator_type`, `value` | Check if phone/account/URL/domain is known | `indicators` |
+| `query_stats` | None | Aggregate stats — available to every role | `aggregate` (all roles) |
+| `query_mcp_log` | `limit?` (int) | Recent MCP audit entries (reading the log is itself audited) | `aggregate` (all roles) |
+
+### Valid roles for WorkBuddy
+
+| Role | Can see | Cannot see |
+|------|---------|------------|
+| `fraud_ops` | Everything | — |
+| `compliance` | Campaigns, MO, indicators, artifacts, compliance briefs, case IDs | Transcripts, PII, phone numbers, account numbers |
+| `customer_service` | Campaigns, CS advisories, indicators, artifacts | Compliance briefs, case data, PII |
+| `auditor` | Campaigns, case IDs, MO, compliance briefs, CS advisories, artifacts | PII |
+| `analyst` | Campaigns, case IDs, MO, indicators, artifacts | Customer data |
+| `partner_bank` | Indicators, MO, aggregate stats | Case IDs, campaign identity, PII |
+| `public` | Aggregate statistics only | Everything else |
+
+> **Role escalation is blocked.** Launching with `compliance` and asking for `fraud_ops` in the tool arguments gets you `compliance`. The process-level role is the ceiling.
+
+---
+
 ## Troubleshooting
 
 ### "ns_events table: MISSING"
