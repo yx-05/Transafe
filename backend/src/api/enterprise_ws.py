@@ -28,6 +28,18 @@ HEARTBEAT_SECONDS = 25
 DEFAULT_BACKLOG = 25
 
 
+async def _release(task: asyncio.Task[Any]) -> None:
+    """Cancel a pending task and wait for it to actually stop.
+
+    Awaiting the cancellation matters: a bare ``cancel()`` leaves the task
+    scheduled, so an in-flight ``queue.get()`` can still pull an event off the
+    queue after we have moved on and drop it on the floor.
+    """
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await task
+
+
 @enterprise_ws_router.websocket("/enterprise/ws/events")
 async def enterprise_events_ws(
     websocket: WebSocket,
@@ -48,12 +60,11 @@ async def enterprise_events_ws(
     async def send(payload: Any) -> bool:
         """Send one frame, reporting whether the client is still there.
 
-        A send to a socket whose peer has already gone raises inside starlette,
-        and uvicorn logs a bare ``socket.send() raised exception.`` for each
-        one. With a console that remounts on every navigation (React
-        StrictMode mounts twice), those lines are the dominant log noise and
-        they bury real errors. Treating a failed send as "client gone" ends the
-        loop immediately instead.
+        This is a second line of defence, not the primary detection. It cannot
+        be: asyncio's transport *silently discards* writes to a socket whose
+        peer has gone — it bumps ``_conn_lost`` and returns without raising —
+        so ``send_json`` reports success and this never returns False for a
+        dead client. See :func:`drain_client` for what actually works.
         """
         if websocket.client_state is not WebSocketState.CONNECTED:
             return False
@@ -62,6 +73,38 @@ async def enterprise_events_ws(
         except Exception:  # noqa: BLE001 - a dead socket is not an error
             return False
         return True
+
+    async def drain_client() -> None:
+        """Return as soon as the client goes away, for any reason.
+
+        This endpoint is push-only, so nothing else here reads inbound frames —
+        which is exactly why this task has to exist. Starlette only moves
+        ``client_state`` to DISCONNECTED inside ``receive()``, and uvicorn only
+        hands the ``websocket.disconnect`` message over there. With no reader:
+
+        * the guard in ``send`` above could never trip, because asyncio
+          swallows the write instead of raising;
+        * the loop never broke, so the ``finally`` below never ran and every
+          vanished client stayed subscribed for the life of the process.
+
+        A leaked subscriber is not merely untidy. ``EventBroadcaster.publish``
+        fans out to it on every event, and once its queue fills it logs a
+        second warning per event — so a handful of dead sockets turn every
+        later event into a burst of noise that buries the real error.
+        """
+        while True:
+            try:
+                message = await websocket.receive()
+            except Exception:  # noqa: BLE001 - any receive failure means gone
+                return
+            if message.get("type") == "websocket.disconnect":
+                return
+            # Anything else is unsolicited. Ignoring it matches the previous
+            # behaviour, where inbound frames were simply never read.
+
+    # Started before the first send so a client that vanishes during the
+    # backlog replay is noticed too.
+    disconnect: asyncio.Task[None] = asyncio.create_task(drain_client())
 
     try:
         history: list[dict[str, Any]] = []
@@ -83,13 +126,28 @@ async def enterprise_events_ws(
             return
 
         while True:
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_SECONDS)
-            except TimeoutError:
+            # Race the next event against the client going away. ``wait`` does
+            # not cancel the loser, so whichever task is left pending is
+            # released explicitly.
+            pending: asyncio.Task[dict[str, Any]] = asyncio.create_task(queue.get())
+            done, _pending = await asyncio.wait(
+                {pending, disconnect},
+                timeout=HEARTBEAT_SECONDS,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if disconnect in done:
+                await _release(pending)
+                break
+
+            if not done:
+                # Idle for a whole window, so prove the socket is still there.
+                await _release(pending)
                 if not await send({"type": "heartbeat"}):
                     break
                 continue
 
+            event = pending.result()
             if layer and event.get("layer") != layer:
                 continue
             if not await send(event):
@@ -102,6 +160,7 @@ async def enterprise_events_ws(
         with contextlib.suppress(Exception):
             await websocket.close()
     finally:
+        await _release(disconnect)
         # The subscription must not outlive the socket, or every publish keeps
         # filling a queue nobody will ever drain.
         broadcaster.unsubscribe(queue)
