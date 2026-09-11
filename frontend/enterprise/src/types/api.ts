@@ -132,6 +132,29 @@ export interface EvalRunResponse {
 }
 
 /**
+ * One readiness check from `GET /enterprise/preflight`.
+ *
+ * `status` is a four-way verdict, not a boolean. `warn` covers things you can
+ * still demo with — the model running in thinking mode, no core skill published
+ * yet — and `info` is context that is never a problem (zero campaigns is a
+ * valid *starting* state). Collapsing these into pass/fail would make the
+ * verdict cry wolf, and an alarm that cries wolf gets ignored.
+ */
+export interface PreflightCheck {
+  name: string;
+  status: "pass" | "warn" | "fail" | "info";
+  detail: string;
+  /** Observed facts worth showing beside the verdict, e.g. `version`, `tools`. */
+  [fact: string]: unknown;
+}
+
+export interface PreflightResponse {
+  ok: boolean;
+  summary: string;
+  checks: PreflightCheck[];
+}
+
+/**
  * One blue-team cycle (`POST /eval/adaptation`).
  *
  * Only some keys are typed because the endpoint reports whatever the cycle

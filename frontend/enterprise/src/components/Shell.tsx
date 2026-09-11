@@ -8,13 +8,15 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Activity, Play, RotateCcw, Repeat } from "lucide-react";
+import { Activity, Play, RotateCcw, Repeat, Wand2 } from "lucide-react";
 import { useEventStore } from "../store/useEventStore";
 import { useCampaignStore } from "../store/useCampaignStore";
 import { useEventSubscription } from "../hooks/useEventSubscription";
+import { useDemoPrep } from "../hooks/useDemoPrep";
 import { loadReplaySequence } from "../services/replay";
 import { api, lastFixtureRoute, subscribeFixture } from "../services/api";
 import { formatNumber } from "../lib/format";
+import DemoPrep from "./DemoPrep";
 
 const NAV = [
   { to: "/", label: "OVERVIEW", end: true },
@@ -34,6 +36,8 @@ export function Shell() {
   const overview = useCampaignStore((s) => s.overview);
   const loadOverview = useCampaignStore((s) => s.loadOverview);
   const [busy, setBusy] = useState(false);
+  const [prepOpen, setPrepOpen] = useState(false);
+  const prep = useDemoPrep();
 
   // Pushed, not sampled. Any screen can fall back to a fixture at any moment;
   // the badge has to appear when that happens, not when the shell's own
@@ -184,8 +188,32 @@ export function Shell() {
             >
               <RotateCcw size={12} /> RESET
             </button>
+            <button
+              type="button"
+              className={`btn ${prep.stage === "ready" ? "btn-ready" : ""}`}
+              onClick={() => setPrepOpen((open) => !open)}
+              title={
+                "Readiness checks and one-click warm-up. Wraps the RESET + " +
+                "run-discovery-twice runbook into a single action."
+              }
+            >
+              <Wand2 size={12} /> PREP
+              {prep.stage === "ready" && <span className="prep-dot" />}
+            </button>
           </div>
         </div>
+
+        {prepOpen && (
+          <DemoPrep
+            preflight={prep.preflight}
+            checking={prep.checking}
+            stage={prep.stage}
+            detail={prep.detail}
+            onCheck={prep.checkReadiness}
+            onWarmup={prep.startWarmup}
+            onClose={() => setPrepOpen(false)}
+          />
+        )}
 
         <div className="counter-strip" data-testid="counter-strip">
           <span className="counter">

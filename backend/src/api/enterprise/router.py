@@ -2006,6 +2006,31 @@ async def run_eval(body: EvalRunRequest | None = None) -> dict[str, Any]:
     }
 
 
+@router.get("/preflight")
+async def preflight() -> dict[str, Any]:
+    """Report whether this machine is actually ready to demo.
+
+    Every dependency the demo touches, checked in one call: Supabase, the v2
+    migration, a published core skill, the MCP server's tool surface, and the
+    configured model.
+
+    Deliberately a read: it touches nothing and mutates nothing, so it is safe
+    to run moments before going on stage, and safe to leave on a screen.
+
+    ``ok`` is False only when something is genuinely broken. A ``warn`` (the
+    model running in thinking mode, an unpublished core skill) does not block a
+    demo, and treating it as failure would train the operator to ignore the
+    verdict — which is the only way a readiness check becomes useless.
+
+    Returns:
+        Dict with ``ok``, ``summary`` and ``checks`` (each ``name``, ``status``,
+        ``detail`` and any observed facts).
+    """
+    from src.enterprise import preflight as preflight_mod
+
+    return await preflight_mod.run_preflight()
+
+
 @router.get("/eval/latest")
 async def get_latest_eval() -> dict[str, Any]:
     """Return the latest before/after comparison, or an explicit "no run" state.

@@ -104,6 +104,152 @@ button {
   gap: 8px;
 }
 
+/* ── Demo preparation panel ───────────────────────────────────────────── */
+
+.btn-ready {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.prep-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  margin-left: 2px;
+}
+
+/* Anchored under the header, above the screens. Fixed rather than absolute so
+   it cannot be clipped by a panel that happens to scroll. */
+.demo-prep {
+  position: fixed;
+  top: 96px;
+  right: 18px;
+  z-index: 40;
+  width: 620px;
+  max-width: calc(100vw - 36px);
+  max-height: calc(100vh - 130px);
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+.demo-prep-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.demo-prep-head .k {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+}
+
+.demo-prep-head .btn {
+  margin-left: auto;
+}
+
+.demo-prep-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* The running chain. Amber while working, green when a candidate exists, red
+   when it gave up — the three states an operator actually needs to tell apart. */
+.demo-prep-stage {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 183, 77, 0.35);
+  background: var(--amber-dim);
+  color: var(--amber);
+  margin-bottom: 10px;
+}
+
+.demo-prep-stage.ok {
+  border-color: rgba(76, 175, 80, 0.45);
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+.demo-prep-stage.bad {
+  border-color: rgba(239, 83, 80, 0.45);
+  background: var(--red-dim);
+  color: var(--red);
+}
+
+.demo-prep-summary {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 6px 0 8px;
+}
+
+.demo-prep-summary.ok {
+  color: var(--green);
+}
+
+.demo-prep-summary.bad {
+  color: var(--red);
+}
+
+.demo-prep-check {
+  display: grid;
+  grid-template-columns: 16px 130px 44px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: 12px;
+}
+
+.demo-prep-check .icon {
+  font-family: var(--mono);
+}
+
+.demo-prep-check .name {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.demo-prep-check .verdict {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+
+.demo-prep-check .detail {
+  color: var(--text-dim);
+}
+
+.demo-prep-check.pass .icon,
+.demo-prep-check.pass .verdict {
+  color: var(--green);
+}
+
+.demo-prep-check.warn .icon,
+.demo-prep-check.warn .verdict {
+  color: var(--amber);
+}
+
+.demo-prep-check.fail .icon,
+.demo-prep-check.fail .verdict {
+  color: var(--red);
+}
+
+.demo-prep-check.info .icon,
+.demo-prep-check.info .verdict {
+  color: var(--text-faint);
+}
+
 .mode-badge {
   display: inline-flex;
   align-items: center;

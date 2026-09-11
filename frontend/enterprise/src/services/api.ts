@@ -34,6 +34,7 @@ import type {
   EventQuery,
   McpLogResponse,
   OverviewResponse,
+  PreflightResponse,
 } from "../types/api";
 import type {
   ArtifactDetail,
@@ -298,6 +299,17 @@ export const api = {
       run_id: "fixture-run",
       label: "after",
       status: "completed",
+    })),
+  /**
+   * Readiness report. The failure fallback is deliberately NOT a green
+   * fixture: a readiness check that can be satisfied by fabricated data is
+   * worse than no check, because it is exactly the moment you would trust it.
+   */
+  getPreflight: () =>
+    fetchJSON<PreflightResponse>("/preflight", () => ({
+      ok: false,
+      summary: "Preflight unavailable — the backend did not answer",
+      checks: [],
     })),
   /**
    * The blue-team half: score the corpus, generalise a rule from the misses,
