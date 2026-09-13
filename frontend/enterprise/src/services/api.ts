@@ -35,6 +35,7 @@ import type {
   McpLogResponse,
   OverviewResponse,
   PreflightResponse,
+  RedteamCorpus,
 } from "../types/api";
 import type {
   ArtifactDetail,
@@ -323,6 +324,14 @@ export const api = {
       status: "fixture",
     })),
   getLatestEval: () => fetchJSON<EvalComparison>("/eval/latest", mocks.mockEval),
+
+  /**
+   * The cases behind the red-team number. Committed fixtures scored against the
+   * core version each of the two latest runs used, so the per-case verdicts are
+   * recomputed rather than read from a stored opinion.
+   */
+  getRedteamCorpus: () =>
+    fetchJSON<RedteamCorpus>("/eval/redteam", mocks.mockRedteamCorpus),
 
   /**
    * `asRole` is the redaction *lens*, not a filter — it asks "what would this

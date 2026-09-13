@@ -125,6 +125,41 @@ export interface EvalComparison {
   after_results?: EvalVariantResult[];
 }
 
+/**
+ * One red-team mutation — an actual test in the frozen corpus.
+ *
+ * The corpus is committed fixtures, so the mutation set is identical for the
+ * before and after runs. That is what makes the delta attributable to the
+ * artifact version rather than to a differently-sampled set of attacks, which
+ * is why the screen shows the cases themselves rather than only the totals.
+ */
+export interface RedteamTest {
+  case_id: string;
+  /** What the mutation does, in the corpus author's words. */
+  tactic: string;
+  /** The defence signal the mutation is aimed at. */
+  targets: string;
+  /** The one caller line that shows what changed. */
+  tell: string;
+  before_detected: boolean;
+  after_detected: boolean;
+  before_score: number;
+  after_score: number;
+}
+
+export interface RedteamCorpus {
+  campaign: string | null;
+  /** Core version the "before" run used; null when it could not be resolved. */
+  core_before: number | null;
+  core_after: number | null;
+  tests: RedteamTest[];
+  summary: {
+    total: number;
+    detected_before: number;
+    detected_after: number;
+  };
+}
+
 export interface EvalRunResponse {
   run_id: string;
   label: string;

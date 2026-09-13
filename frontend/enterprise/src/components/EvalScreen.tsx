@@ -17,10 +17,12 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { EvalComparison, EvalRunSummary } from "../types/api";
+import type { EvalComparison, EvalRunSummary, RedteamCorpus } from "../types/api";
 
 interface Props {
   comparison: EvalComparison;
+  /** The cases behind the red-team number. Omitted until the corpus loads. */
+  redteam?: RedteamCorpus | null;
   onRun?: () => void | Promise<void>;
   running?: boolean;
   /** Run one blue-team cycle: generalise a rule from the misses, publish it, re-score. */
@@ -148,7 +150,7 @@ function PairedBars({
   );
 }
 
-export function EvalScreen({ comparison, onRun, running = false, onAdapt, adapting = false }: Props) {
+export function EvalScreen({ comparison, redteam = null, onRun, running = false, onAdapt, adapting = false }: Props) {
   const { before, after } = comparison;
 
   const detectionData: BarDatum[] = [
@@ -321,6 +323,55 @@ export function EvalScreen({ comparison, onRun, running = false, onAdapt, adapti
             <PairedBars data={fpData} seriesName="false positive %" afterFill="#ef5350" />
           </div>
         </section>
+
+        {redteam && redteam.tests.length > 0 && (
+          <section className="panel rt-panel" data-testid="redteam-corpus">
+            <div className="panel-title">
+              RED-TEAM CORPUS · the tests behind the number
+              <span className="muted" style={{ marginLeft: "auto", letterSpacing: 0 }}>
+                {redteam.summary.detected_before}/{redteam.summary.total} →{" "}
+                {redteam.summary.detected_after}/{redteam.summary.total}
+              </span>
+            </div>
+            <div className="panel-body flush">
+              <p className="rt-note">
+                Frozen fixtures — the same {redteam.summary.total} attacks in both runs, so the
+                delta belongs to the artifact version and not to a different sample. Scored
+                against core{" "}
+                <span className="rt-mono">v{redteam.core_before ?? "—"}</span> and core{" "}
+                <span className="rt-mono">v{redteam.core_after ?? "—"}</span>.
+              </p>
+              <div className="rt-row rt-head">
+                <span>TEST</span>
+                <span>TRIES TO DEFEAT</span>
+                <span>THE LINE THAT CHANGES</span>
+                <span className="rt-verdict">BEFORE</span>
+                <span className="rt-verdict">AFTER</span>
+              </div>
+              {redteam.tests.map((test) => (
+                <div className="rt-row" key={test.case_id} data-testid="rt-row">
+                  <span className="rt-name">{test.case_id.replace(/^redteam_/, "")}</span>
+                  <span className="rt-target">{test.targets}</span>
+                  <span className="rt-tell" title={test.tell}>
+                    {test.tell}
+                  </span>
+                  <span
+                    className={`rt-verdict ${test.before_detected ? "hit" : "miss"}`}
+                    title={`score ${test.before_score}`}
+                  >
+                    {test.before_detected ? "caught" : "missed"}
+                  </span>
+                  <span
+                    className={`rt-verdict ${test.after_detected ? "hit" : "miss"}`}
+                    title={`score ${test.after_score}`}
+                  >
+                    {test.after_detected ? "caught" : "missed"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );

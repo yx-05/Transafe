@@ -2076,6 +2076,38 @@ async def get_latest_eval() -> dict[str, Any]:
     }
 
 
+@router.get("/eval/redteam")
+async def get_redteam_corpus() -> dict[str, Any]:
+    """Return the frozen red-team tests and how each one scored before/after.
+
+    The evaluation screen shows the *totals*; this endpoint shows the *tests
+    behind them*. The corpus is committed fixtures, so the mutation set is
+    identical for the before and after runs — which is exactly what makes the
+    delta attributable to the artifact version rather than to a different
+    sample of attacks. Exposing the cases, the line each one changes and its
+    per-case verdict lets an operator audit the headline number instead of
+    taking it on trust.
+
+    Returns:
+        Dict with ``campaign``, ``core_before``/``core_after`` versions,
+        ``tests`` and a ``summary`` count. Degrades to an empty ``tests`` list
+        rather than raising.
+    """
+    from src.enterprise import evaluation
+
+    return await asyncio.to_thread(
+        _safe,
+        evaluation.get_redteam_tests,
+        {
+            "campaign": None,
+            "core_before": None,
+            "core_after": None,
+            "tests": [],
+            "summary": {"total": 0, "detected_before": 0, "detected_after": 0},
+        },
+    )
+
+
 # ── Demo transport (Shell controls) ──────────────────────────────────────────
 class ScenarioRequest(BaseModel):
     """Body of ``POST /enterprise/demo/scenario``.

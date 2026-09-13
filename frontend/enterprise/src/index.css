@@ -1124,12 +1124,96 @@ button {
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 10px;
   min-height: 0;
+  overflow-y: auto;
 }
 
 .eval-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 10px;
+}
+
+/* ── Red-team corpus table ────────────────────────────────────────────── */
+
+/*
+ * Every panel in this grid needs an explicit height floor. `.eval-charts` sits
+ * in a height-constrained row, so its auto rows size to zero once a fourth
+ * panel competes for the space — the charts then render as bare borders with
+ * no bars. The floor keeps all four panels visible; the grid scrolls instead.
+ */
+.eval-charts > .panel {
+  min-height: 260px;
+}
+
+/* The corpus table is the taller panel, so it spans the full width and gets a
+   floor of its own. Declared after the rule above so it wins at equal
+   specificity. */
+.eval-charts > .rt-panel {
+  grid-column: 1 / -1;
+  min-height: 420px;
+  max-height: 60vh;
+}
+
+.rt-note {
+  margin: 0 0 6px;
+  padding: 6px 12px 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.rt-mono {
+  color: var(--text);
+}
+
+.rt-row {
+  display: grid;
+  grid-template-columns: 150px 170px 1fr 66px 66px;
+  gap: 10px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  align-items: baseline;
+}
+
+.rt-head {
+  color: var(--text-faint);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  border-bottom: 1px solid var(--line);
+}
+
+.rt-head .rt-verdict {
+  text-align: center;
+}
+
+.rt-name {
+  color: var(--text);
+}
+
+.rt-target {
+  color: var(--amber);
+}
+
+.rt-tell {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rt-verdict {
+  text-align: center;
+}
+
+.rt-verdict.hit {
+  color: var(--green);
+}
+
+.rt-verdict.miss {
+  color: var(--red);
 }
 
 .stat {

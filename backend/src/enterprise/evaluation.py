@@ -828,6 +828,134 @@ def get_eval_comparison(client: Any | None = None) -> dict[str, Any]:
     return {"before": before, "after": after}
 
 
+# ── Red-team corpus inspection ───────────────────────────────────────────────
+#: What each mutation is *trying* to defeat, keyed by case id.
+#:
+#: Kept beside the harness rather than in :mod:`src.enterprise.corpus` so the
+#: corpus stays pure data + generation, and so the console can label a row
+#: without re-deriving the intent from prose written for a human reader.
+REDTEAM_TARGETS: dict[str, str] = {
+    "redteam_phase_reorder": "phase order",
+    "redteam_synonym_sub": "signature phrase",
+    "redteam_lang_switch": "language",
+    "redteam_no_novel_phrase": "signature phrase",
+    "redteam_extra_phase": "legitimacy signals",
+    "redteam_identifier_obfuscation": "watchlist identifier",
+    "redteam_partial_phrase": "signature phrase",
+    "redteam_code_switch": "language",
+    "redteam_soft_pressure": "isolation instruction",
+    "redteam_callback_recon": "money ask (absent by design)",
+}
+
+#: Words that make a caller line the informative one to show on screen.
+_TELL_WORDS = ("pindah", "transfer", "move your money", "move the funds", "safe account")
+
+
+def _tell_line(transcript: list[dict[str, Any]]) -> str:
+    """Pick the one caller line that shows what a mutation changed.
+
+    Preference order: a line carrying the campaign signature phrase, then a line
+    making the money movement, then the longest caller line. Deterministic, and
+    never an ``AI_AGENT`` utterance — those state the conclusion, so quoting one
+    would make the corpus look self-labelling.
+
+    Args:
+        transcript: The case transcript.
+
+    Returns:
+        The chosen line, or ``""`` when the transcript has no caller speech.
+    """
+    from src.enterprise.corpus import SIGNATURE_PHRASES
+
+    caller = [
+        str(u.get("utterance") or "")
+        for u in transcript or []
+        if str(u.get("speaker", "")).upper() == "CALLER"
+    ]
+    if not caller:
+        return ""
+    for phrase in SIGNATURE_PHRASES:
+        for line in caller:
+            if phrase in line.casefold():
+                return line
+    for line in caller:
+        if any(word in line.casefold() for word in _TELL_WORDS):
+            return line
+    return max(caller, key=len)
+
+
+def get_redteam_tests(client: Any | None = None) -> dict[str, Any]:
+    """Return the frozen red-team corpus with its real before/after outcomes.
+
+    The corpus is committed fixtures, so the *tests* never change between runs —
+    only the defence does. Each case is scored against the core body that the
+    two most recent eval runs actually used, so the before/after columns are
+    recomputed from the same rule engine the harness uses rather than read from
+    a stored verdict. That keeps this view honest when a core version has been
+    rolled back or a run predates a schema change.
+
+    Args:
+        client: Optional injected Supabase client.
+
+    Returns:
+        Dict with ``campaign``, the two core versions, ``tests`` and a
+        ``summary`` count. Degrades to an empty ``tests`` list rather than
+        raising when the corpus or the registry is unreachable.
+    """
+    from src.enterprise.corpus import campaign_profile
+
+    try:
+        cases = _load_corpus(EVAL_DIR, category="redteam")
+    except Exception as exc:  # pragma: no cover - fixtures are committed
+        logger.warning("redteam corpus load failed: %s", exc)
+        cases = []
+
+    rows = _latest_rows(2, client=client)
+    summaries = [_row_summary(row) for row in rows]
+    before_run = summaries[1] if len(summaries) > 1 else None
+    after_run = summaries[0] if summaries else None
+
+    def core_of(summary: dict[str, Any] | None) -> tuple[set[str], int | None]:
+        version = ((summary or {}).get("artifact_ver") or {}).get(CORE_ARTIFACT_NAME)
+        if version is None:
+            return set(), None
+        artifact = registry.get_artifact(CORE_ARTIFACT_NAME, version=version, client=client)
+        return parse_core_rules(str((artifact or {}).get("content") or "")), version
+
+    before_rules, before_ver = core_of(before_run)
+    after_rules, after_ver = core_of(after_run)
+
+    tests: list[dict[str, Any]] = []
+    for case in cases:
+        case_id = str(case.get("case_id"))
+        before = score_case(case, core_rules=before_rules)
+        after = score_case(case, core_rules=after_rules)
+        tests.append(
+            {
+                "case_id": case_id,
+                "tactic": str(case.get("variant_note") or ""),
+                "targets": REDTEAM_TARGETS.get(case_id, "—"),
+                "tell": _tell_line(case.get("transcript") or []),
+                "before_detected": bool(before["detected"]),
+                "after_detected": bool(after["detected"]),
+                "before_score": before["score"],
+                "after_score": after["score"],
+            }
+        )
+
+    return {
+        "campaign": campaign_profile()["code"],
+        "core_before": before_ver,
+        "core_after": after_ver,
+        "tests": tests,
+        "summary": {
+            "total": len(tests),
+            "detected_before": sum(1 for t in tests if t["before_detected"]),
+            "detected_after": sum(1 for t in tests if t["after_detected"]),
+        },
+    }
+
+
 async def run_adaptation_evaluation(
     corpus_dir: str | Path | None = None,
     client: Any | None = None,

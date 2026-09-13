@@ -17,6 +17,7 @@ import type {
   McpLogResponse,
   McpLogRow,
   OverviewResponse,
+  RedteamCorpus,
 } from "../types/api";
 import type {
   ArtifactDetail,
@@ -768,6 +769,76 @@ export const mockEval = (): EvalComparison => ({
     noise_fp: 0.1,
     artifact_ver: { phone_agent_core: 7, "SCAM-027.json": 1 },
   },
+});
+
+/**
+ * The red-team cases behind the chart.
+ *
+ * `before_detected` reflects the pack tier alone (no structural rule), so the
+ * evasions that removed the phrase or the language mostly miss. After the core
+ * patch the structural rule catches them and the false-positive set is
+ * unchanged — which is the whole argument the screen is making.
+ */
+export const mockRedteamCorpus = (): RedteamCorpus => ({
+  campaign: "SCAM-027",
+  core_before: 6,
+  core_after: 7,
+  // Five of the ten fixtures, kept consistent with the cases below: the pack
+  // tier already handles the obfuscation case (normalisation strips the
+  // spaces), and the recon-only case has no money ask to catch.
+  summary: { total: 5, detected_before: 1, detected_after: 4 },
+  tests: [
+    {
+      case_id: "redteam_synonym_sub",
+      tactic: "signature phrase replaced with a synonym",
+      targets: "signature phrase",
+      tell: "Kami akan pindahkan dana encik ke akaun penampan sementara di bawah kawalan kami.",
+      before_detected: false,
+      after_detected: true,
+      before_score: 0,
+      after_score: 0.72,
+    },
+    {
+      case_id: "redteam_lang_switch",
+      tactic: "entire script switched to English, Malay signature phrase gone with it",
+      targets: "language",
+      tell: "We will move your money to a temporary holding account under our control for safekeeping.",
+      before_detected: false,
+      after_detected: true,
+      before_score: 0,
+      after_score: 0.72,
+    },
+    {
+      case_id: "redteam_phase_reorder",
+      tactic: "money ask first, isolation later, phrase broken up",
+      targets: "phase order",
+      tell: "Kami akan pindahkan dana encik ke akaun sementara yang selamat di bawah kawalan kami.",
+      before_detected: false,
+      after_detected: true,
+      before_score: 0,
+      after_score: 0.72,
+    },
+    {
+      case_id: "redteam_identifier_obfuscation",
+      tactic: "watchlist account digits re-spaced to defeat literal matching",
+      targets: "watchlist identifier",
+      tell: "Kami akan pindahkan dana encik ke akaun kawalan sementara kami.",
+      before_detected: true,
+      after_detected: true,
+      before_score: 0.95,
+      after_score: 0.99,
+    },
+    {
+      case_id: "redteam_callback_recon",
+      tactic: "reconnaissance only: no money ask, no isolation, no phrase",
+      targets: "money ask (absent by design)",
+      tell: "Encik boleh hubungi saya semula di 015-3409 4317 jika talian terputus.",
+      before_detected: false,
+      after_detected: false,
+      before_score: 0,
+      after_score: 0,
+    },
+  ],
 });
 
 /** Raw operator-view rows — full `params`/`citations`, as `fraud_ops` sees them. */

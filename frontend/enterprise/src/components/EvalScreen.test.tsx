@@ -2,13 +2,44 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import EvalScreen from "./EvalScreen";
-import { mockEval } from "../services/mockData";
+import { mockEval, mockRedteamCorpus } from "../services/mockData";
 
 describe("EvalScreen", () => {
   it("gives the false-positive chart the same weight as detection", () => {
     render(<EvalScreen comparison={mockEval()} />);
     expect(screen.getByTestId("detection-chart")).toBeInTheDocument();
     expect(screen.getByTestId("false-positive-chart")).toBeInTheDocument();
+  });
+
+  it("names the actual red-team tests behind the number", () => {
+    // The totals are a claim; the cases are the evidence for it. Without this
+    // panel the operator has to take the red-team number on trust.
+    render(<EvalScreen comparison={mockEval()} redteam={mockRedteamCorpus()} />);
+    expect(screen.getByTestId("redteam-corpus")).toBeInTheDocument();
+    expect(screen.getAllByTestId("rt-row")).toHaveLength(5);
+    expect(screen.getByText("synonym_sub")).toBeInTheDocument();
+    expect(screen.getByText("signature phrase")).toBeInTheDocument();
+    expect(screen.getByText(/akaun penampan sementara/)).toBeInTheDocument();
+  });
+
+  it("marks each test caught or missed on both sides", () => {
+    render(<EvalScreen comparison={mockEval()} redteam={mockRedteamCorpus()} />);
+    // Five fixtures × two verdict columns. The obfuscation case is caught by
+    // both sides; the recon-only case is missed by both, which is correct — it
+    // never asks for money, so the structural rule must not fire.
+    expect(screen.getAllByText("caught")).toHaveLength(5);
+    expect(screen.getAllByText("missed")).toHaveLength(5);
+    expect(screen.getByText("1/5 → 4/5")).toBeInTheDocument();
+  });
+
+  it("omits the corpus panel when no tests are available", () => {
+    render(
+      <EvalScreen
+        comparison={mockEval()}
+        redteam={{ ...mockRedteamCorpus(), tests: [] }}
+      />,
+    );
+    expect(screen.queryByTestId("redteam-corpus")).not.toBeInTheDocument();
   });
 
   it("reports the paired before/after detection numbers", () => {

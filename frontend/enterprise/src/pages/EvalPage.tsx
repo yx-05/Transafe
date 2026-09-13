@@ -2,17 +2,23 @@ import { useCallback, useEffect, useState } from "react";
 import EvalScreen from "../components/EvalScreen";
 import { api } from "../services/api";
 import { useEventSubscription } from "../hooks/useEventSubscription";
-import type { EvalComparison } from "../types/api";
+import type { EvalComparison, RedteamCorpus } from "../types/api";
 
 const EMPTY: EvalComparison = { before: null, after: null };
 
 export function EvalPage() {
   const [comparison, setComparison] = useState<EvalComparison>(EMPTY);
+  const [redteam, setRedteam] = useState<RedteamCorpus | null>(null);
   const [running, setRunning] = useState(false);
   const [adapting, setAdapting] = useState(false);
 
   const load = useCallback(async () => {
-    setComparison(await api.getLatestEval());
+    const [comparisonPayload, redteamPayload] = await Promise.all([
+      api.getLatestEval(),
+      api.getRedteamCorpus(),
+    ]);
+    setComparison(comparisonPayload);
+    setRedteam(redteamPayload);
   }, []);
 
   useEffect(() => {
@@ -40,6 +46,7 @@ export function EvalPage() {
   return (
     <EvalScreen
       comparison={comparison}
+      redteam={redteam}
       running={running}
       adapting={adapting}
       onRun={async () => {

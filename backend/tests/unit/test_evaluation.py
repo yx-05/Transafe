@@ -483,3 +483,99 @@ async def test_run_evaluation_prefers_the_published_version_over_the_pinned_one(
         use_llm=False,
     )
     assert result["artifact_ver"][CORE_ARTIFACT_NAME] == 11
+
+
+# ── get_redteam_tests ──────────────────────────────────────────────────────
+_CORE_V6 = (
+    "# phone_agent_core\n\n## Escalation rules\n\n"
+    "- R-1: Escalate when the caller requests a one-time code or password.\n"
+)
+_CORE_V7 = (
+    _CORE_V6 + "\nR-3: Escalate when a caller who claims to represent an official authority "
+    "instructs the customer to keep the call secret and to move funds to another account.\n"
+)
+
+
+def _run_row(label: str, version: int) -> dict:
+    """An ``eval_runs`` row in the nested shape ``_store_eval_run`` writes."""
+    return {
+        "id": f"run-{version}",
+        "label": label,
+        "started_at": "2026-09-12T00:00:00Z",
+        "summary": {"artifact_ver": {CORE_ARTIFACT_NAME: version}},
+    }
+
+
+def _patch_redteam(monkeypatch, rows: list[dict], bodies: dict[int, str]) -> None:
+    """Pin the two latest runs and the core bodies they resolved to."""
+    monkeypatch.setattr(evaluation, "_latest_rows", lambda limit=2, client=None: rows)
+    monkeypatch.setattr(
+        evaluation.registry,
+        "get_artifact",
+        lambda name, version=None, client=None: (
+            {"content": bodies[version], "version": version} if version in bodies else None
+        ),
+    )
+
+
+def test_redteam_tests_scores_each_case_against_both_core_versions(monkeypatch):
+    """Every fixture is scored twice, so the panel shows a real before/after."""
+    _patch_redteam(
+        monkeypatch,
+        [_run_row("after", 7), _run_row("before", 6)],
+        {6: _CORE_V6, 7: _CORE_V7},
+    )
+
+    payload = evaluation.get_redteam_tests()
+
+    assert payload["core_before"] == 6
+    assert payload["core_after"] == 7
+    assert payload["summary"]["total"] == len(payload["tests"]) == 10
+    # The pack tier catches the evasions it is not aimed at; the structural rule
+    # is what closes the rest.
+    assert payload["summary"]["detected_before"] == 2
+    assert payload["summary"]["detected_after"] == 9
+
+
+def test_redteam_tests_names_the_signal_each_mutation_targets(monkeypatch):
+    """A row without a target would be a case id and nothing else."""
+    _patch_redteam(
+        monkeypatch,
+        [_run_row("after", 7), _run_row("before", 6)],
+        {6: _CORE_V6, 7: _CORE_V7},
+    )
+
+    by_id = {t["case_id"]: t for t in evaluation.get_redteam_tests()["tests"]}
+
+    assert by_id["redteam_synonym_sub"]["targets"] == "signature phrase"
+    assert by_id["redteam_lang_switch"]["targets"] == "language"
+    assert by_id["redteam_identifier_obfuscation"]["targets"] == "watchlist identifier"
+    # The recon-only case is the one expected to stay missed on both sides.
+    recon = by_id["redteam_callback_recon"]
+    assert recon["before_detected"] is False
+    assert recon["after_detected"] is False
+
+
+def test_redteam_tests_quotes_caller_speech_never_the_ai_warning(monkeypatch):
+    """The quoted line is evidence, so it must not be the system's own verdict."""
+    _patch_redteam(
+        monkeypatch,
+        [_run_row("after", 7), _run_row("before", 6)],
+        {6: _CORE_V6, 7: _CORE_V7},
+    )
+
+    for test in evaluation.get_redteam_tests()["tests"]:
+        assert test["tell"], f'{test["case_id"]} has no quoted line'
+        assert not test["tell"].startswith(("Amaran", "Warning"))
+
+
+def test_redteam_tests_degrades_without_runs(monkeypatch):
+    """No runs means no core rules — never an exception on the screen."""
+    _patch_redteam(monkeypatch, [], {})
+
+    payload = evaluation.get_redteam_tests()
+
+    assert payload["core_before"] is None
+    assert payload["core_after"] is None
+    assert payload["summary"]["total"] == 10
+    assert payload["summary"]["detected_after"] <= payload["summary"]["detected_before"]
