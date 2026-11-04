@@ -157,7 +157,7 @@ export const CallActivePage: React.FC = () => {
           if (msg.type === 'transcript' && msg.text) {
             const speaker = normalizeSpeaker(msg.speaker);
             addTranscript(speaker, msg.text);
-            setStatusLog((prev) => [...prev, `[GROQ WHISPER STT] [${msg.speaker}]: "${msg.text}"`]);
+            setStatusLog((prev) => [...prev, `[STT] [${msg.speaker}]: "${msg.text}"`]);
           }
           if (msg.type === 'highlight' && msg.highlighted_spans) {
             const spans = msg.highlighted_spans

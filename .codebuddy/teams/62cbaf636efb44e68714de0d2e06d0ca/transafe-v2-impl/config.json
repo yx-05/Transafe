@@ -1,0 +1,25 @@
+{
+  "name": "transafe-v2-impl",
+  "mainConversationId": "62cbaf636efb44e68714de0d2e06d0ca",
+  "workspacePath": "/Users/Admin/Documents/GitHub/Transafe",
+  "createdAt": "2026-09-10T10:33:43.161Z",
+  "options": {
+    "workspacePath": "/Users/Admin/Documents/GitHub/Transafe",
+    "isAutoTeam": false
+  },
+  "isAutoTeam": false,
+  "members": [
+    {
+      "memberId": "backend-core@transafe-v2-impl",
+      "name": "backend-core",
+      "role": "Backend core B0-B2 audit and gap closure",
+      "sessionId": "915218ef7bc74528b67372ee29a4049c"
+    },
+    {
+      "memberId": "frontend@transafe-v2-impl",
+      "name": "frontend",
+      "role": "Enterprise console frontend audit and gap closure",
+      "sessionId": "f8b1e1ab387249f988e2a75da6bd47f0"
+    }
+  ]
+}

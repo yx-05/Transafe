@@ -1,16 +1,15 @@
 """Phone Worker Agent for TranSafe Multi-Agent pipeline."""
 
 import inspect
-import json
 import logging
 import os
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
-from src.agents.llm import extract_json_object, invoke_groq_with_key_rotation
+from src.agents.llm import DEEPSEEK_BASE_URL, extract_json_object, invoke_groq_with_key_rotation
 from src.agents.prompts import (
     AUTOTALK_SYSTEM_PROMPT,
     build_autotalk_response_prompt,
@@ -19,7 +18,8 @@ from src.agents.prompts import (
     get_phone_dialogue_guide,
 )
 from src.agents.state import GraphState, WorkerFinding
-from src.db.vector_store import check_blacklist, search_fraud_memory
+from src.agents.workers.artifact_feed import load_core_guide, load_learned_phrases
+from src.db.vector_store import check_blacklist
 
 logger = logging.getLogger(__name__)
 
@@ -27,14 +27,19 @@ logger = logging.getLogger(__name__)
 AUTOTALK_VOICE = "ms-MY-YasminNeural"
 
 
-def get_phone_llm(model_name: str = "llama-3.3-70b-versatile") -> ChatGroq:
-    """Get ChatGroq LLM instance reading GROQ_API_KEY dynamically at runtime."""
-    raw_key = os.getenv("GROQ_API_KEY") or "gsk_placeholder_key_for_initialization"
-    return ChatGroq(model=model_name, temperature=0.0, api_key=SecretStr(raw_key))
+def get_phone_llm(model_name: str = "deepseek-chat") -> ChatOpenAI:
+    """Get ChatOpenAI LLM instance (DeepSeek) reading DEEPSEEK_API_KEY dynamically at runtime."""
+    raw_key = os.getenv("DEEPSEEK_API_KEY") or "sk-placeholder_key_for_initialization"
+    return ChatOpenAI(
+        model=model_name,
+        temperature=0.0,
+        api_key=SecretStr(raw_key),
+        base_url=DEEPSEEK_BASE_URL,
+    )
 
 
 class DynamicPhoneLLM:
-    """Dynamic LLM proxy reading GROQ_API_KEY dynamically with multi-key rotation and fallback."""
+    """Dynamic LLM proxy using DeepSeek with multi-key rotation and fallback."""
 
     def invoke(self, messages: Any, **kwargs: Any) -> Any:
         return invoke_groq_with_key_rotation(messages)
@@ -54,7 +59,7 @@ HIGH_RISK_PHRASES = [
     "safe account", "akaun selamat",
     "money laundering", "pengubahan wang haram",
     "face arrest", "akan ditangkap",
-    "otp", "one time password", 
+    "otp", "one time password",
     "bank negara malaysia", "pdrm", "lhdn",
     "transfer immediately", "pindah segera",
     "jabatan kastam", "your account suspended", "akaun anda digantung",
@@ -89,21 +94,32 @@ def _scan_high_risk_phrases(
     Shared by Listen Mode and Auto-Talk Mode so that scammer utterances are
     always surfaced with highlight spans in the UI, regardless of the active
     call mode. Returns (highlight_events, score_increment, evidence).
+
+    Scans the built-in ``HIGH_RISK_PHRASES`` **plus** phrases learned from
+    published campaign packs. The learned set is what makes an approved
+    campaign change detection rather than merely produce a receipt; evidence
+    for a learned phrase cites the campaign that taught it, so an analyst can
+    tell an inherited rule from a shipped one.
     """
     highlight_events: list[dict[str, Any]] = []
     score_increment = 0
     evidence: list[str] = []
 
+    learned = load_learned_phrases()
+    scan_phrases = list(HIGH_RISK_PHRASES) + [p for p in learned if p not in HIGH_RISK_PHRASES]
+
     for utt in transcript:
         raw_text = str(utt.get("text") or utt.get("utterance", ""))
         speaker = str(utt.get("speaker", "CALLER"))
         lower_text = raw_text.lower()
-        matched_phrases = [p for p in HIGH_RISK_PHRASES if p in lower_text]
+        matched_phrases = [p for p in scan_phrases if p in lower_text]
         if not matched_phrases:
             continue
         score_increment += len(matched_phrases) * 30
         for phrase in matched_phrases:
-            evidence.append(f"Spoken danger phrase detected: '{phrase}' by {speaker}")
+            source = learned.get(phrase)
+            origin = f" (learned from campaign {source})" if source else ""
+            evidence.append(f"Spoken danger phrase detected: '{phrase}' by {speaker}{origin}")
             highlight_events.append({
                 "utterance_id": str(utt.get("utterance_id", f"utt-{len(highlight_events)+1}")),
                 "speaker": speaker,
@@ -345,7 +361,12 @@ def _run_autotalk_responder(
     """
     try:
         anchor_questions = get_anchor_questions()
-        dialogue_guide = get_phone_dialogue_guide()
+        # The published core skill wins over the checked-in skill file when one
+        # exists: ``phone_agent_core`` is the campaign-agnostic tier, so an
+        # approved generalisation changes what this agent does on its next
+        # invocation. An empty string (nothing published, or the registry is
+        # unreachable) falls back to the file — the pre-artifact behaviour.
+        dialogue_guide = load_core_guide() or get_phone_dialogue_guide()
     except Exception as err:  # noqa: BLE001
         logger.warning(f"AUTO_TALK skills unavailable, using fallback reply: {err}")
         anchor_questions = []
@@ -425,11 +446,11 @@ def phone_worker_node(
 
     if call_mode == "AUTO_TALK":
         finding = _analyze_autotalk_mode(transcript, caller_number, pre_check)
-        
-        # Surface both rules-based AND LLM-based coercion phrase highlights 
+
+        # Surface both rules-based AND LLM-based coercion phrase highlights
         # for the scammer's utterances even in Auto-Talk Mode, so the UI can mark them.
         _, highlights = _run_listen_mode(transcript, caller_number, pre_check, llm_enrich=llm_enrich)
-        
+
         # Merge the rules-based score increment into the AutoTalk finding
         _, rule_score_inc, rule_evidence = _scan_high_risk_phrases(transcript)
         if rule_score_inc:
@@ -440,7 +461,7 @@ def phone_worker_node(
                 confidence=finding.confidence,
                 evidence=list(finding.evidence) + rule_evidence,
             )
-            
+
         return {
             "phone_finding": finding.model_dump(),
             "phone_session": {

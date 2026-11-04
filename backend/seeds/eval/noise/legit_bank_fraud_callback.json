@@ -1,0 +1,79 @@
+{
+  "case_id": "legit_bank_fraud_callback",
+  "category": "noise",
+  "is_scam": false,
+  "other_scam_family": false,
+  "campaign": null,
+  "variant_note": "genuine bank fraud-ops callback about a blocked card",
+  "created_at": "2026-09-10T09:00:00Z",
+  "transcript": [
+    {
+      "seq_idx": 0,
+      "speaker": "CALLER",
+      "utterance": "Good afternoon, this is the fraud operations team at your bank calling on a recorded line.",
+      "risk_score": 15
+    },
+    {
+      "seq_idx": 1,
+      "speaker": "USER",
+      "utterance": "Yes, how can I help?",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 2,
+      "speaker": "CALLER",
+      "utterance": "We flagged a card transaction of RM 3,200 this morning and want to confirm whether you made it.",
+      "risk_score": 20
+    },
+    {
+      "seq_idx": 3,
+      "speaker": "USER",
+      "utterance": "No, that was not me.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 4,
+      "speaker": "CALLER",
+      "utterance": "Thank you. We have already blocked the card. You do not need to do anything else today.",
+      "risk_score": 10
+    },
+    {
+      "seq_idx": 5,
+      "speaker": "CALLER",
+      "utterance": "We will never ask you to move your money, and we will never ask for a one-time code.",
+      "risk_score": 10
+    },
+    {
+      "seq_idx": 6,
+      "speaker": "USER",
+      "utterance": "Good, because I have been reading about scams.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 7,
+      "speaker": "CALLER",
+      "utterance": "If you prefer, hang up and call the number on the back of your card, or our published line 013-3701 8113.",
+      "risk_score": 8
+    },
+    {
+      "seq_idx": 8,
+      "speaker": "USER",
+      "utterance": "That is reassuring, thank you.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 9,
+      "speaker": "CALLER",
+      "utterance": "A replacement card will reach you in three working days. Have a good afternoon.",
+      "risk_score": 5
+    }
+  ],
+  "expected_mo": null,
+  "expected_entities": [
+    {
+      "entity_type": "PHONE",
+      "value": "013-3701 8113",
+      "value_norm": "+601337018113"
+    }
+  ]
+}

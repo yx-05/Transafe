@@ -1,0 +1,80 @@
+{
+  "slug": "noise-03",
+  "case_id": "2fe07f8e-20cd-5e7f-b165-51cced49dce2",
+  "case_number": 48,
+  "user_id": "a41c7a8e-5147-564f-b644-249cecf7873e",
+  "customer_name": "Daniel (FICTIONAL)",
+  "kind": "noise",
+  "campaign": null,
+  "scam_family": "romance",
+  "created_at": "2026-09-08T21:00:00Z",
+  "channel": "voice",
+  "risk_score": 61,
+  "transcript": [
+    {
+      "seq_idx": 0,
+      "speaker": "CALLER",
+      "utterance": "Sayang, it is me. I finally got a phone line at the port.",
+      "risk_score": 20
+    },
+    {
+      "seq_idx": 1,
+      "speaker": "USER",
+      "utterance": "I was worried, you did not reply for days.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 2,
+      "speaker": "CALLER",
+      "utterance": "My shipment is held at customs and I need RM 9,400 to release it, Daniel.",
+      "risk_score": 65
+    },
+    {
+      "seq_idx": 3,
+      "speaker": "USER",
+      "utterance": "Again? I already sent money last month.",
+      "risk_score": 10
+    },
+    {
+      "seq_idx": 4,
+      "speaker": "CALLER",
+      "utterance": "I know, and I will pay you back double. Bank in to account 6672-4417-9903-2286 under my agent's name.",
+      "risk_score": 75
+    },
+    {
+      "seq_idx": 5,
+      "speaker": "USER",
+      "utterance": "I do not have that kind of money.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 6,
+      "speaker": "AI_AGENT",
+      "utterance": "Warning: repeated advance-fee requests from an unverified contact.",
+      "risk_score": 70
+    }
+  ],
+  "mo_fingerprint": {
+    "impersonated_entity": null,
+    "pretext": "account compromised, funds must be moved",
+    "script_phases": [
+      "safe_account_transfer"
+    ],
+    "pressure_tactics": [],
+    "novel_phrases": [],
+    "languages": [
+      "en"
+    ],
+    "verification_evasion": null,
+    "evidence_utterances": [],
+    "narrative": "Derived deterministically from transcript structure (no LLM).",
+    "derived": true
+  },
+  "entities": [
+    {
+      "entity_type": "ACCOUNT",
+      "value": "6672-4417-9903-2286",
+      "value_norm": "6672441799032286"
+    }
+  ]
+}

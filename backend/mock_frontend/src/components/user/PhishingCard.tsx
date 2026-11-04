@@ -176,7 +176,7 @@ export const PhishingCard: React.FC<PhishingCardProps> = ({
 
         {sourceType === 'IMAGE' && (
           <div className="form-group image-upload-group">
-            <label><Upload size={16} /> Upload Screenshot Image (Groq Vision OCR)</label>
+            <label><Upload size={16} /> Upload Screenshot Image (DeepSeek Vision OCR)</label>
             <input type="file" accept="image/*" onChange={handleImageUpload} />
             {imagePreview && (
               <div className="image-preview">

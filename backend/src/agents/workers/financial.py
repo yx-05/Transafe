@@ -7,10 +7,10 @@ import os
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
-from src.agents.llm import extract_json_object, invoke_groq_with_key_rotation
+from src.agents.llm import DEEPSEEK_BASE_URL, extract_json_object, invoke_groq_with_key_rotation
 from src.agents.prompts import build_financial_prompt
 from src.agents.state import GraphState, WorkerFinding
 from src.db.supabase import fetch_user_transaction_history
@@ -18,14 +18,19 @@ from src.db.supabase import fetch_user_transaction_history
 logger = logging.getLogger(__name__)
 
 
-def get_financial_llm(model_name: str = "llama-3.3-70b-versatile") -> ChatGroq:
-    """Get ChatGroq LLM instance reading GROQ_API_KEY dynamically at runtime."""
-    raw_key = os.getenv("GROQ_API_KEY") or "gsk_placeholder_key_for_initialization"
-    return ChatGroq(model=model_name, temperature=0.0, api_key=SecretStr(raw_key))
+def get_financial_llm(model_name: str = "deepseek-chat") -> ChatOpenAI:
+    """Get ChatOpenAI LLM instance (DeepSeek) reading DEEPSEEK_API_KEY dynamically at runtime."""
+    raw_key = os.getenv("DEEPSEEK_API_KEY") or "sk-placeholder_key_for_initialization"
+    return ChatOpenAI(
+        model=model_name,
+        temperature=0.0,
+        api_key=SecretStr(raw_key),
+        base_url=DEEPSEEK_BASE_URL,
+    )
 
 
 class DynamicFinancialLLM:
-    """Dynamic LLM proxy reading GROQ_API_KEY dynamically with multi-key rotation and 429 rate limit fallback."""
+    """Dynamic LLM proxy using DeepSeek with multi-key rotation and 429 rate limit fallback."""
 
     def invoke(self, messages: Any, **kwargs: Any) -> Any:
         return invoke_groq_with_key_rotation(messages)
@@ -68,6 +73,33 @@ def _check_case_context_match(
     return recipient_account in context_str
 
 
+def _published_block_match(recipient: str) -> str | None:
+    """Return the recipient's digit-only account when a published rule blocks it.
+
+    Consumes L5's ``txn_rule`` artifacts: an approved campaign names mule
+    accounts, and a transfer to one of them must be stopped deterministically
+    rather than left to the LLM's judgement. Reading the rules here is also what
+    writes this agent's consumption receipt.
+
+    Args:
+        recipient: Recipient account as it appears in the transaction.
+
+    Returns:
+        The digit-only account when a published ``BLOCK`` rule matches, else
+        ``None``.
+    """
+    try:
+        from src.agents.workers.artifact_feed import blocked_recipient_accounts
+
+        blocked = blocked_recipient_accounts()
+    except Exception as err:  # noqa: BLE001 - detection must not depend on it
+        logger.debug(f"published txn rules unavailable: {err}")
+        return None
+
+    digits = "".join(ch for ch in str(recipient) if ch.isdigit())
+    return digits if digits and digits in blocked else None
+
+
 def _rule_based_financial_analysis(
     pending_tx: dict[str, Any],
     history: dict[str, Any],
@@ -83,6 +115,18 @@ def _rule_based_financial_analysis(
     evidence: list[str] = []
     score = 10
     confidence = 0.90
+
+    # 0. Published campaign transaction rules (highest precedence). A mule
+    #    account named by an approved campaign is a known-bad recipient, so this
+    #    check runs ahead of the behavioural heuristics and does not depend on
+    #    the LLM agreeing.
+    if _published_block_match(recipient):
+        score = 100
+        confidence = 0.99
+        evidence.append(
+            f"CRITICAL: Recipient account {recipient} is blocked by a published "
+            "campaign rule"
+        )
 
     # 1. Amount deviation check
     if avg_amount > 0 and amount > (5 * avg_amount):
@@ -166,7 +210,7 @@ def financial_worker_node(state: GraphState) -> dict[str, Any]:
     # Baseline rule-based assessment
     finding = _rule_based_financial_analysis(pending_tx, history, case_context)
 
-    # Invoke LLM dynamically with current GROQ_API_KEY
+    # Invoke LLM dynamically with current DEEPSEEK_API_KEY
     try:
         prompt_text = build_financial_prompt(pending_tx, history, case_context)
         messages = [
@@ -206,5 +250,18 @@ def financial_worker_node(state: GraphState) -> dict[str, Any]:
         )
         if not any(match_ev in e for e in finding.evidence):
             finding.evidence.insert(0, match_ev)
+
+    # Hard enforcement: an account named by a published campaign rule is
+    # known-bad regardless of what the LLM concluded. Applied after the LLM for
+    # the same reason as the case-context gate above — the model can return a
+    # low score on a transfer the institution has already decided to block.
+    if _published_block_match(recipient_account):
+        finding.score = max(finding.score, 100)
+        finding.confidence = max(finding.confidence, 0.99)
+        rule_ev = (
+            f"Recipient account {recipient_account} is blocked by a published campaign rule"
+        )
+        if not any(rule_ev in e for e in finding.evidence):
+            finding.evidence.insert(0, rule_ev)
 
     return {"financial_finding": finding.model_dump()}

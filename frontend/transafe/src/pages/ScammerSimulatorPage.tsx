@@ -130,7 +130,7 @@ export const ScammerSimulatorPage: React.FC = () => {
   const [transcripts, setTranscripts] = useState<Array<{ speaker: string; text: string; ts: string; interim?: boolean }>>([]);
   const [stepLogs, setStepLogs] = useState<string[]>([
     'Combined Step-by-Step Call + STT Tuning Terminal Ready.',
-    'Dual STT Engine Support: Deepgram Nova-3 (streaming) & Groq Whisper (batch).',
+    'Dual STT Engine Support: Deepgram Nova-3 (streaming) & DashScope Paraformer (batch).',
   ]);
 
   const audioStreamerRef = useRef<CallAudioStreamer>(new CallAudioStreamer());
@@ -209,7 +209,7 @@ export const ScammerSimulatorPage: React.FC = () => {
 
   const handleSelectEngine = async (engine: 'nova-3' | 'groq') => {
     setSttEngine(engine);
-    addLog(`Switched STT Engine to: ${engine === 'nova-3' ? 'Deepgram Nova-3' : 'Groq Whisper'}`);
+    addLog(`Switched STT Engine to: ${engine === 'nova-3' ? 'Deepgram Nova-3' : 'DashScope Paraformer'}`);
     if (callSessionId) {
       try {
         await client.updateSttEngine(callSessionId, engine);
@@ -498,7 +498,7 @@ export const ScammerSimulatorPage: React.FC = () => {
                       transition: 'all 0.2s ease',
                     }}
                   >
-                    🎙️ Groq Whisper
+                    🎙️ DashScope Paraformer
                   </button>
                 </div>
 
@@ -766,14 +766,14 @@ export const ScammerSimulatorPage: React.FC = () => {
                   <div className="flex items-center justify-between border-b-2 border-red-600/40 pb-4">
                     <h3 className="text-lg font-bold text-red-600">Live STT Transcripts</h3>
                     <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-                      {sttEngine === 'nova-3' ? 'Deepgram Nova-3 Streaming' : 'Groq Whisper Batch'} • {sttState === 'transcribing' ? 'TRANSCRIBING...' : 'IDLE'}
+                      {sttEngine === 'nova-3' ? 'Deepgram Nova-3 Streaming' : 'DashScope Paraformer Batch'} • {sttState === 'transcribing' ? 'TRANSCRIBING...' : 'IDLE'}
                     </span>
                   </div>
 
                   {sttState === 'transcribing' && (
                     <div className="flex items-center gap-2 p-3 rounded-xl bg-red-600/15 border border-red-600/40 text-red-400 text-xs">
                       <span className="material-symbols-outlined text-sm animate-spin">autorenew</span>
-                      {sttEngine === 'nova-3' ? 'Deepgram Nova-3 streaming... live interim results' : 'Async Groq Whisper in-flight... Transcribing utterance non-blockingly'}
+                      {sttEngine === 'nova-3' ? 'Deepgram Nova-3 streaming... live interim results' : 'Async DashScope Paraformer in-flight... Transcribing utterance non-blockingly'}
                     </div>
                   )}
 

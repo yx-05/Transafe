@@ -1,0 +1,10 @@
+{
+  "campaign": "SCAM-027",
+  "counts": {
+    "base": 20,
+    "redteam": 10,
+    "noise": 10
+  },
+  "all_data_fictional": true,
+  "generated_by": "src.enterprise.corpus.write_all"
+}

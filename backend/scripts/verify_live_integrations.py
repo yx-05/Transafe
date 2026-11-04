@@ -3,7 +3,7 @@
 Tests real network API connections and data persistence for:
 1. LangSmith Tracing
 2. Supabase PostgreSQL Data Storage
-3. Groq LLM API
+3. DeepSeek LLM API
 4. Tavily Search API
 """
 
@@ -21,23 +21,26 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 load_dotenv()
 
-def verify_groq():
-    print("\n--- 1. Testing Live Groq API ---")
-    api_key = os.getenv("GROQ_API_KEY")
+def verify_deepseek():
+    print("\n--- 1. Testing Live DeepSeek API ---")
+    api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
-        print("[FAIL] GROQ_API_KEY not found in environment.")
+        print("[FAIL] DEEPSEEK_API_KEY not found in environment.")
         return False
 
-    from groq import Groq
-    client = Groq(api_key=api_key)
-    print("Calling Groq LLM model `llama-3.3-70b-versatile`...")
+    from openai import OpenAI
+    client = OpenAI(
+        api_key=api_key,
+        base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+    )
+    print("Calling DeepSeek model `deepseek-chat`...")
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": "Respond with 'GROQ_LIVE_OK'"}],
+        model="deepseek-chat",
+        messages=[{"role": "user", "content": "Respond with 'DEEPSEEK_LIVE_OK'"}],
         max_tokens=20,
     )
     reply = response.choices[0].message.content or ""
-    print(f"[SUCCESS] Groq API Response: '{reply.strip()}'")
+    print(f"[SUCCESS] DeepSeek API Response: '{reply.strip()}'")
     return True
 
 
@@ -145,17 +148,17 @@ async def main():
     print("      TRANSAFE LIVE INTEGRATIONS VERIFICATION PASS")
     print("=" * 65)
 
-    g_ok = verify_groq()
+    d_ok = verify_deepseek()
     t_ok = verify_tavily()
     s_ok = verify_supabase()
     l_ok = await verify_langsmith()
 
     print("\n" + "=" * 65)
     print("SUMMARY RESULTS:")
-    print(f"  Groq API:       {'[OK] PASSED' if g_ok else '[FAIL] FAILED'}")
-    print(f"  Tavily API:     {'[OK] PASSED' if t_ok else '[FAIL] FAILED'}")
-    print(f"  Supabase DB:    {'[OK] PASSED' if s_ok else '[FAIL] FAILED'}")
-    print(f"  LangSmith:      {'[OK] PASSED' if l_ok else '[FAIL] FAILED'}")
+    print(f"  DeepSeek API:  {'[OK] PASSED' if d_ok else '[FAIL] FAILED'}")
+    print(f"  Tavily API:    {'[OK] PASSED' if t_ok else '[FAIL] FAILED'}")
+    print(f"  Supabase DB:   {'[OK] PASSED' if s_ok else '[FAIL] FAILED'}")
+    print(f"  LangSmith:     {'[OK] PASSED' if l_ok else '[FAIL] FAILED'}")
     print("=" * 65)
 
 

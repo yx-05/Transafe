@@ -1,0 +1,55 @@
+{
+  "$comment": [
+    "TranSafe MCP gateway — stdio connection config for Tencent WorkBuddy (also works",
+    "unchanged in Claude Desktop, which reads the same mcpServers shape).",
+    "",
+    "WorkBuddy reads this from ~/.workbuddy-ai/mcp.json — note 'mcp.json', NOT",
+    "'.mcp.json'. A config at the wrong path fails silently: the server never appears.",
+    "Merge the block below into the EXISTING mcpServers object rather than replacing",
+    "the file, or you will clobber other servers you have configured.",
+    "",
+    "Saving is not enough: WorkBuddy ships custom MCP servers DISABLED. Restart it,",
+    "open connector management, find the custom connectors entry at the top-right,",
+    "and click Trust on 'transafe'. Until you do, no tool call reaches TranSafe.",
+    "",
+    "Replace <ABS_PATH> with the absolute path to this repository's backend/ directory.",
+    "",
+    "Use the venv interpreter above, NOT a bare 'uv': WorkBuddy is a GUI app and does",
+    "not inherit your shell PATH, so 'uv' (usually in ~/.local/bin) is not resolvable",
+    "and the server fails to launch with no useful error in the UI. The venv path is",
+    "also faster and offline-safe, since it skips uv's per-launch project resolution.",
+    "",
+    "TRANSAFE_ROLE is the process-level entitlement CEILING. A tools/call argument may",
+    "name a NARROWER role (useful for previewing redaction), but never a broader one.",
+    "Launching with 'public' and asking for 'fraud_ops' gets you 'public'.",
+    "",
+    "Valid roles: fraud_ops, compliance, customer_service, legal, auditor, analyst,",
+    "partner_bank, external_researcher, public. Anything else is treated as public.",
+    "",
+    "Do NOT add SUPABASE_URL / SUPABASE_SERVICE_KEY here. The server loads",
+    "backend/.env itself. A placeholder like '${SUPABASE_URL}' expands to the empty",
+    "string when the GUI environment does not define it, and an env var passed by the",
+    "client WINS over .env - so the server would start with a blank Supabase URL and",
+    "fail on the first query while still reporting a healthy connection.",
+    "",
+    "This file is the repo's reference copy. The block to paste into WorkBuddy is",
+    "just the 'mcpServers' object below; drop the $comment key, which is for readers",
+    "of this repository and is not part of WorkBuddy's schema.",
+    "",
+    "Every call — success, denial, rate limit, error — is written to mcp_access_log and",
+    "emitted as an exposure/mcp_call ns_event, visible live on console Screen G."
+  ],
+  "mcpServers": {
+    "transafe": {
+      "command": "/Users/Admin/Documents/GitHub/Transafe/backend/.venv/bin/python",
+      "args": ["-m", "mcp.server"],
+      "cwd": "/Users/Admin/Documents/GitHub/Transafe/backend",
+      "env": {
+        "TRANSAFE_CALLER": "workbuddy",
+        "TRANSAFE_ROLE": "compliance",
+        "TRANSAFE_LOG_LEVEL": "INFO"
+      },
+      "description": "TranSafe fraud intelligence - role-redacted campaigns, cases, indicators and defense artifacts."
+    }
+  }
+}

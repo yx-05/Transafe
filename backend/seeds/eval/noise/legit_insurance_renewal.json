@@ -1,0 +1,55 @@
+{
+  "case_id": "legit_insurance_renewal",
+  "category": "noise",
+  "is_scam": false,
+  "other_scam_family": false,
+  "campaign": null,
+  "variant_note": "genuine insurance renewal, payment via official app only",
+  "created_at": "2026-09-11T21:00:00Z",
+  "transcript": [
+    {
+      "seq_idx": 0,
+      "speaker": "CALLER",
+      "utterance": "Good morning, calling from your insurance provider about a renewal.",
+      "risk_score": 10
+    },
+    {
+      "seq_idx": 1,
+      "speaker": "USER",
+      "utterance": "Which policy?",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 2,
+      "speaker": "CALLER",
+      "utterance": "Mr Nurul, your motor policy renews next month and the premium is RM 1,180.",
+      "risk_score": 12
+    },
+    {
+      "seq_idx": 3,
+      "speaker": "USER",
+      "utterance": "Can I pay later?",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 4,
+      "speaker": "CALLER",
+      "utterance": "Of course. Please pay through the official app or at any branch. I cannot take payment over the phone.",
+      "risk_score": 8
+    },
+    {
+      "seq_idx": 5,
+      "speaker": "USER",
+      "utterance": "Understood, I will do it in the app.",
+      "risk_score": 5
+    },
+    {
+      "seq_idx": 6,
+      "speaker": "CALLER",
+      "utterance": "Thank you, the renewal notice is also in your registered email.",
+      "risk_score": 5
+    }
+  ],
+  "expected_mo": null,
+  "expected_entities": []
+}

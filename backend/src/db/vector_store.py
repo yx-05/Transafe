@@ -1,14 +1,22 @@
-"""Groq pgvector Vector Store Helper for TranSafe Fraud Memory."""
+"""pgvector Vector Store Helper for TranSafe Fraud Memory.
 
+Uses Alibaba Cloud DashScope for embeddings (China-accessible, 768-dim compatible).
+DeepSeek API does not offer an embeddings endpoint, so DashScope's text-embedding-v3
+is used instead — it supports 768-dimensional output to match the existing pgvector schema.
+"""
+
+import logging
 import os
+import threading
 from typing import Any, cast
 
-from groq import Groq
 from pydantic import BaseModel
 from supabase import Client, create_client
 
-groq_client: Groq | None = None
-supabase_client: Client | None = None
+logger = logging.getLogger(__name__)
+
+# Lazy-initialized clients
+_dashscope_client: Any | None = None
 
 
 class FraudMemoryRecord(BaseModel):
@@ -25,47 +33,79 @@ class FraudMemoryRecord(BaseModel):
     source: str = "user_report"
 
 
-def init_vector_store() -> None:
-    """Initialize Groq and Supabase clients for vector store operations."""
-    global groq_client, supabase_client
-    groq_api_key = os.getenv("GROQ_API_KEY", "")
+#: An explicitly injected client (tests, or a caller building its own).
+#: When set, it is returned as-is and nothing thread-local is created.
+supabase_client: Client | None = None
+
+#: One Supabase client per thread.
+#:
+#: ``supabase.Client`` wraps a **synchronous** httpx client, and httpx sync
+#: clients are not safe for concurrent use. The enterprise API runs every query
+#: in an ``asyncio.to_thread`` worker — 25 call sites in
+#: ``src/api/enterprise/router.py`` alone — so a single module-level client was
+#: being driven from many threads at once. Under that load the HTTP/2 stream
+#: corrupts and the peer terminates the connection, which surfaces as
+#: ``httpx.ReadError: [Errno 35] Resource temporarily unavailable`` and
+#: ``httpcore.RemoteProtocolError: <ConnectionTerminated ...>``.
+#:
+#: It went unnoticed because the failure is *survivable*: the API degrades to an
+#: empty result rather than erroring, so the console rendered zeroed counters
+#: instead of reporting a fault. A per-thread client removes the shared mutable
+#: state that made concurrency unsafe in the first place.
+_thread_local = threading.local()
+
+
+def _client_from_env() -> Client | None:
+    """Build a fresh Supabase client from the environment, or None if unset."""
     supabase_url = os.getenv("SUPABASE_URL", "")
     supabase_key = os.getenv("SUPABASE_SERVICE_KEY", "")
-
-    if groq_api_key:
-        groq_client = Groq(api_key=groq_api_key)
     if supabase_url and supabase_key:
-        supabase_client = create_client(supabase_url, supabase_key)
+        return create_client(supabase_url, supabase_key)
+    return None
 
 
-def get_groq_client() -> Groq:
-    """Get the initialized Groq client.
+def init_vector_store() -> None:
+    """Initialize the DashScope and Supabase clients.
 
-    Raises:
-        RuntimeError: If Groq client is not initialized.
+    Retained for callers that want one eagerly-built client. Prefer
+    :func:`get_supabase_client`, which hands each thread its own.
     """
-    if groq_client is None:
-        init_vector_store()
-    if groq_client is None:
-        raise RuntimeError("Groq client is not initialized.")
-    return groq_client
+    global _dashscope_client, supabase_client
+    client = _client_from_env()
+    if client is not None:
+        supabase_client = client
 
 
 def get_supabase_client() -> Client:
-    """Get the initialized Supabase client.
+    """Return a Supabase client that is safe to use from the calling thread.
+
+    An explicitly set module-level ``supabase_client`` wins, so tests and
+    callers that inject their own are unaffected. Otherwise each thread lazily
+    builds and keeps its own client.
+
+    Returns:
+        A Supabase client bound to this thread.
 
     Raises:
-        RuntimeError: If Supabase client is not initialized.
+        RuntimeError: If Supabase has not been configured.
     """
-    if supabase_client is None:
-        init_vector_store()
-    if supabase_client is None:
-        raise RuntimeError("Supabase client is not initialized.")
-    return supabase_client
+    if supabase_client is not None:
+        return supabase_client
+
+    client = getattr(_thread_local, "client", None)
+    if client is None:
+        client = _client_from_env()
+        if client is None:
+            raise RuntimeError("Supabase client is not initialized.")
+        _thread_local.client = client
+    return client
 
 
 def embed_text(text: str) -> list[float]:
-    """Generate 768-dimensional text embedding via Groq nomic-embed-text-v1.5.
+    """Generate 768-dimensional text embedding via Alibaba DashScope text-embedding-v3.
+
+    Falls back to a deterministic dummy vector for offline / mock testing when
+    no DashScope API key is available.
 
     Args:
         text: Input string to embed.
@@ -73,20 +113,45 @@ def embed_text(text: str) -> list[float]:
     Returns:
         List of 768 float values.
     """
+    api_key = os.getenv("DASHSCOPE_API_KEY", "")
+    if not api_key:
+        # Fallback to 768-dimensional deterministic dummy vector for offline / mock testing
+        import hashlib
+        import random
+        seed = int(hashlib.md5(text.encode()).hexdigest(), 16)
+        r = random.Random(seed)
+        return [round(r.uniform(-0.1, 0.1), 4) for _ in range(768)]
+
     try:
-        client = get_groq_client()
-        response = client.embeddings.create(
-            model="nomic-embed-text-v1.5",
-            input=text,
+        import httpx
+        base_url = os.getenv(
+            "DASHSCOPE_BASE_URL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
         )
-        raw_embedding = response.data[0].embedding
+        response = httpx.post(
+            f"{base_url}/embeddings",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": os.getenv("DASHSCOPE_EMBEDDING_MODEL", "qwen3.7-text-embedding"),
+                "input": text,
+                "dimensions": 768,
+                "encoding_format": "float",
+            },
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        raw_embedding = data["data"][0]["embedding"]
         if isinstance(raw_embedding, list):
             return [float(x) for x in raw_embedding]
     except Exception:  # noqa: BLE001
-        # Fallback to 768-dimensional dummy float vector for offline / mock testing
+        # Fallback to 768-dimensional deterministic dummy vector
         import hashlib
-        seed = int(hashlib.md5(text.encode()).hexdigest(), 16)
         import random
+        seed = int(hashlib.md5(text.encode()).hexdigest(), 16)
         r = random.Random(seed)
         return [round(r.uniform(-0.1, 0.1), 4) for _ in range(768)]
     return [0.0] * 768
@@ -138,7 +203,7 @@ def hybrid_search_fraud_memory(
             Queries public.fraud_memory for exact matches on bank_accounts array,
             phone_numbers array, or text content tokens.
     Step 2: Dense Vector Similarity Search:
-            Queries public.fraud_memory using nomic-embed-text 768-dim embeddings.
+            Queries public.fraud_memory using 768-dim embeddings.
     Step 3: Deduplicates & Reranks Results.
     """
     client = get_supabase_client()
@@ -236,7 +301,7 @@ def add_fraud_memory(
 
     Args:
         case_id: Optional parent fraud case UUID.
-        fraud_type: Type of fraud (e.g., macau_scam, phishing, investment_scam).
+        fraud_type: Type of fraud (e.g. macau_scam, phishing, investment_scam).
         content: Narrative text embedded for vector search.
         metadata: Additional metadata dictionary (phone_numbers, bank_accounts, etc.).
     """

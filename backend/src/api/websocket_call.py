@@ -25,6 +25,7 @@ from src.db.supabase import (
     insert_case_entities,
     insert_fraud_case,
 )
+from src.enterprise.ingest import notify_case_completed
 from src.services.call_precheck import run_call_precheck
 from src.services.stt import transcribe_audio_chunk
 from src.services.stt_streaming import DeepgramStreamingSession
@@ -117,10 +118,27 @@ async def _finalize_ended_call(call_session_id: str) -> None:
         print(f"[DEEP ANALYSIS ❌] {call_session_id} call-end: {err}")
 
     # Persist every call (even LOW risk) as a case so the user can label it later.
+    case_id: str | None = None
     try:
-        await _persist_call_case(call_session_id, deep_event)
+        case_id = await _persist_call_case(call_session_id, deep_event)
     except Exception as err:  # noqa: BLE001
         print(f"[PERSIST CASE ❌] {call_session_id}: {err}")
+
+    # v1 → v2 handoff. Fire-and-forget: notify_case_completed schedules a
+    # background task and returns. The call has already ended and `call_ended`
+    # has already been broadcast, so nothing downstream of here can affect a
+    # live call.
+    #
+    # Wrapped rather than trusted. It raises nothing today, but that is the
+    # callee's discipline, not this function's structure: one future edit that
+    # throws before its own try — a module-level lookup, an import moved inside
+    # — and the teardown below would stop running, leaking an audio buffer per
+    # ended call into a live v1 service. The buffers are v1's to free whatever
+    # v2 does, so the guarantee belongs here where it can be seen.
+    try:
+        notify_case_completed(case_id)
+    except Exception as err:  # noqa: BLE001
+        print(f"[V2 INGEST ❌] {call_session_id}: {err}")
 
     # Clean up audio buffers immediately
     call_audio_buffers.pop(call_session_id, None)
@@ -878,7 +896,7 @@ async def ws_call_audio_stream(
 
     # STT engine mode: deepgram -> live streaming; groq -> buffered batch
     call_data = session_store.get_call(call_session_id)
-    stt_engine = (call_data or {}).get("stt_engine", "groq")
+    stt_engine = (call_data or {}).get("stt_engine", "deepgram")
     dg_session: DeepgramStreamingSession | None = None
     dg_task: asyncio.Task | None = None
     if str(stt_engine).lower() in ("deepgram", "nova-3", "nova3"):
@@ -1003,7 +1021,7 @@ async def ws_call_audio_stream(
 
 
 async def process_stt_transcription(call_session_id: str, speaker_role: str, audio_bytes: bytes) -> None:
-    """Transcribe audio chunk via non-blocking AsyncGroq Whisper STT with single-flight locking."""
+    """Transcribe audio chunk via non-blocking STT with single-flight locking."""
     # Notify UI that STT processing is in-flight
     await broadcast_event(call_session_id, {
         "type": "stt_status",
@@ -1016,7 +1034,7 @@ async def process_stt_transcription(call_session_id: str, speaker_role: str, aud
         if not call_data or call_data.get("status") == "ENDED":
             return
 
-        stt_engine = call_data.get("stt_engine", "groq") if call_data else "groq"
+        stt_engine = call_data.get("stt_engine", "deepgram") if call_data else "deepgram"
         text = await transcribe_audio_chunk(
             audio_bytes, filename="chunk.webm", language="en", stt_engine=stt_engine
         )

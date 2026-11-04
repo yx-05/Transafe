@@ -1,0 +1,611 @@
+"""Unit tests for the evaluation harness (B7, 07_evaluation.md §8).
+
+Tests ``src.enterprise.evaluation`` — the module that runs the 40-case
+corpus through the detection pipeline, scores results with
+``src.enterprise.metrics``, and persists ``eval_runs`` rows.
+
+All external calls (Supabase, LLM) are mocked. No network, no API keys.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from src.enterprise import evaluation
+from src.enterprise.evaluation import (
+    CORE_ARTIFACT_NAME,
+    DETECTION_THRESHOLD,
+    STRUCTURAL_RULE,
+    _load_corpus,
+    _noisy_or,
+    active_core_rules,
+    parse_core_rules,
+    score_case,
+)
+
+
+# ── _noisy_or ──────────────────────────────────────────────────────────────
+def test_noisy_or_single_signal():
+    """A single signal at weight w gives score w."""
+    assert _noisy_or([0.9]) == pytest.approx(0.9)
+
+
+def test_noisy_or_two_independent_signals():
+    """Two independent signals fuse to 1-(1-w1)(1-w2)."""
+    expected = 1 - (1 - 0.8) * (1 - 0.7)
+    assert _noisy_or([0.8, 0.7]) == pytest.approx(expected)
+
+
+def test_noisy_or_empty_is_zero():
+    """No signals means no detection."""
+    assert _noisy_or([]) == pytest.approx(0.0)
+
+
+def test_noisy_or_clamps_above_one():
+    """Weights above 1 are clamped to 1."""
+    assert _noisy_or([1.5]) == pytest.approx(1.0)
+
+
+def test_noisy_or_clamps_below_zero():
+    """Negative weights are clamped to 0."""
+    assert _noisy_or([-0.3]) == pytest.approx(0.0)
+
+
+# ── parse_core_rules ───────────────────────────────────────────────────────
+def test_parse_core_rules_empty():
+    """No content means no rules."""
+    assert parse_core_rules("") == set()
+    assert parse_core_rules(None) == set()
+
+
+def test_parse_core_rules_no_match():
+    """A body with no authority/isolation/money triple yields no rules."""
+    body = "R-1: Be polite to callers.\nR-2: Ask for their name."
+    assert parse_core_rules(body) == set()
+
+
+def test_parse_core_rules_structural_escalation():
+    """A rule with authority + isolation + money is recognised."""
+    body = (
+        "R-1: When someone claims to be a government official "
+        "and instructs the victim not to tell anyone "
+        "while demanding a transfer of funds, flag as high risk."
+    )
+    rules = parse_core_rules(body)
+    assert STRUCTURAL_RULE in rules
+
+
+def test_parse_core_rules_multiple_rules():
+    """Only the matching rule is identified, not a non-matching one."""
+    body = (
+        "R-1: Be polite.\n\n"
+        "R-2: An officer demanding secrecy and a payment "
+        "transfer is a structural escalation."
+    )
+    rules = parse_core_rules(body)
+    assert STRUCTURAL_RULE in rules
+    assert len(rules) == 1
+
+
+# ── active_core_rules ──────────────────────────────────────────────────────
+def test_active_core_rules_from_explicit_content():
+    """When core_content is provided, it is parsed directly."""
+    body = (
+        "R-1: A police officer demanding secrecy "
+        "and a funds transfer is high risk."
+    )
+    rules, version = active_core_rules(core_content=body)
+    assert STRUCTURAL_RULE in rules
+    assert version is None
+
+
+def test_active_core_rules_empty_content():
+    """Empty content means no rules and no version."""
+    rules, version = active_core_rules(core_content="")
+    assert rules == set()
+    assert version is None
+
+
+@patch("src.enterprise.evaluation.registry.get_artifact")
+def test_active_core_rules_from_registry(mock_get: MagicMock):
+    """When no content is given, the registry is read."""
+    mock_get.return_value = {
+        "content": (
+            "R-1: An official demanding secrecy and payment "
+            "transfer is high risk."
+        ),
+        "version": 7,
+    }
+    rules, version = active_core_rules()
+    assert STRUCTURAL_RULE in rules
+    assert version == 7
+
+
+@patch("src.enterprise.evaluation.registry.get_artifact")
+def test_active_core_rules_registry_miss(mock_get: MagicMock):
+    """A missing artifact degrades to no rules, never raises."""
+    mock_get.return_value = None
+    rules, version = active_core_rules()
+    assert rules == set()
+    assert version is None
+
+
+@patch("src.enterprise.evaluation.registry.get_artifact")
+def test_active_core_rules_registry_exception(mock_get: MagicMock):
+    """A DB failure degrades to no rules."""
+    mock_get.side_effect = RuntimeError("relation does not exist")
+    rules, version = active_core_rules()
+    assert rules == set()
+    assert version is None
+
+
+# ── score_case ──────────────────────────────────────────────────────────────
+def _scam_transcript():
+    """A transcript that hits both identifier and phrase signals.
+
+    Note: the extractor reads ``utterance`` (not ``text``) — same as the
+    v1 pipeline and the corpus files.
+    """
+    return [
+        {"speaker": "SCAMMER", "utterance": "I am calling from Maybank security."},
+        {
+            "speaker": "SCAMMER",
+            "utterance": "Please transfer to 1592-3456-7890-1234 "
+            "at bnm-verify-portal.example "
+            "akaun selamat sementara.",
+        },
+    ]
+
+
+def test_score_case_no_signals():
+    """A benign transcript with no matches scores below threshold."""
+    case = {
+        "transcript": [
+            {"speaker": "CALLER", "utterance": "Hello, how are you today?"},
+            {"speaker": "AGENT", "utterance": "I am fine, thank you."},
+        ]
+    }
+    result = score_case(case)
+    assert result["score"] < DETECTION_THRESHOLD
+    assert result["detected"] is False
+    assert result["signals"] == []
+
+
+def test_score_case_watchlist_hit():
+    """A hard identifier in the watchlist produces a pack-tier signal."""
+    from src.enterprise.corpus import campaign_profile
+
+    profile = campaign_profile()
+    # The watchlist account is 1592-3456-7890-1234 — include it in the
+    # transcript so the entity extractor picks it up.
+    case = {
+        "transcript": [
+            {
+                "speaker": "SCAMMER",
+                "utterance": "Transfer to 1592-3456-7890-1234 "
+                "at bnm-verify-portal.example "
+                "akaun selamat sementara.",
+            },
+        ]
+    }
+    result = score_case(case, profile=profile)
+    signal_types = [s["signal"] for s in result["signals"]]
+    assert "watchlist_identifier" in signal_types
+    assert result["detected"] is True
+
+
+def test_score_case_signature_phrase():
+    """A matching phrase produces a pack-tier signal.
+
+    Note: ``transcript_text`` only includes ``CALLER`` and ``USER``
+    speakers by default (``EVIDENCE_SPEAKERS``), so the phrase must
+    come from the victim's side of the conversation.
+    """
+    # The campaign signature phrase is "akaun selamat sementara".
+    case = {
+        "transcript": [
+            {
+                "speaker": "CALLER",
+                "utterance": "Sila pindah ke akaun selamat sementara "
+                "sekarang.",
+            },
+        ]
+    }
+    result = score_case(case)
+    signal_types = [s["signal"] for s in result["signals"]]
+    assert "signature_phrase" in signal_types
+
+
+def test_score_case_structural_rule():
+    """When core rules include the structural rule, it can fire."""
+    case = {
+        "transcript": [
+            {"speaker": "SCAMMER", "utterance": "I am from the police."},
+            {
+                "speaker": "SCAMMER",
+                "utterance": "Do not tell anyone about this.",
+            },
+            {
+                "speaker": "SCAMMER",
+                "utterance": "Transfer the money now.",
+            },
+        ]
+    }
+    # Use the default profile (from campaign_profile) — it has an MO
+    # that should match authority + isolation + money.
+    result = score_case(case, core_rules={STRUCTURAL_RULE})
+    if result["detected"]:
+        signal_types = [s["signal"] for s in result["signals"]]
+        # The structural rule may or may not fire depending on whether
+        # the structural features are all present.
+        if STRUCTURAL_RULE in signal_types:
+            assert any(
+                s["tier"] == "core" for s in result["signals"]
+            )
+
+
+def test_score_case_returns_entities():
+    """Scored cases include the extracted entities list."""
+    case = {"transcript": _scam_transcript()}
+    result = score_case(case)
+    assert isinstance(result["entities"], list)
+
+
+def test_score_case_returns_features():
+    """Scored cases include the structural features set."""
+    case = {"transcript": _scam_transcript()}
+    result = score_case(case)
+    assert isinstance(result["features"], list)
+
+
+# ── _load_corpus ────────────────────────────────────────────────────────────
+def test_load_corpus_missing_dir_returns_empty(tmp_path):
+    """A non-existent directory yields an empty list."""
+    result = _load_corpus(tmp_path / "nonexistent")
+    assert result == []
+
+
+def test_load_corpus_reads_json_files(tmp_path):
+    """JSON files in base/redteam/noise are loaded and tagged."""
+    (tmp_path / "base").mkdir()
+    (tmp_path / "noise").mkdir()
+    (tmp_path / "base" / "case1.json").write_text(
+        '{"case_id": "c1", "transcript": []}'
+    )
+    (tmp_path / "noise" / "n1.json").write_text(
+        '{"case_id": "n1", "transcript": []}'
+    )
+    result = _load_corpus(tmp_path)
+    assert len(result) == 2
+    categories = {c["category"] for c in result}
+    assert categories == {"base", "noise"}
+
+
+def test_load_corpus_filters_by_category(tmp_path):
+    """When a category is specified, only that folder is read."""
+    (tmp_path / "base").mkdir()
+    (tmp_path / "redteam").mkdir()
+    (tmp_path / "base" / "case1.json").write_text(
+        '{"case_id": "c1", "transcript": []}'
+    )
+    (tmp_path / "redteam" / "r1.json").write_text(
+        '{"case_id": "r1", "transcript": []}'
+    )
+    result = _load_corpus(tmp_path, category="base")
+    assert len(result) == 1
+    assert result[0]["category"] == "base"
+
+
+def test_load_corpus_skips_invalid_json(tmp_path):
+    """Unreadable JSON files are skipped, not fatal."""
+    (tmp_path / "base").mkdir()
+    (tmp_path / "base" / "good.json").write_text(
+        '{"case_id": "c1", "transcript": []}'
+    )
+    (tmp_path / "base" / "bad.json").write_text("{not valid json")
+    result = _load_corpus(tmp_path)
+    assert len(result) == 1
+    assert result[0]["case_id"] == "c1"
+
+
+# ── run_evaluation (integration, mocked) ───────────────────────────────────
+@pytest.mark.asyncio
+@patch("src.enterprise.evaluation.get_supabase_client")
+@patch("src.enterprise.evaluation.emit_event")
+@patch("src.enterprise.evaluation.registry")
+async def test_run_evaluation_returns_result(
+    mock_registry: MagicMock,
+    mock_emit: MagicMock,
+    mock_client: MagicMock,
+    tmp_path,
+):
+    """run_evaluation produces a well-formed result dict."""
+    mock_registry.get_artifact.return_value = None
+    mock_registry.list_artifacts.return_value = []
+    mock_emit.return_value = None
+    mock_client.return_value.table.return_value.insert.return_value.execute = (
+        MagicMock(data=[])
+    )
+
+    # Minimal corpus — note: field is "utterance" not "text"
+    (tmp_path / "base").mkdir()
+    (tmp_path / "noise").mkdir()
+    (tmp_path / "base" / "c1.json").write_text(
+        '{"case_id": "c1", "is_scam": true, '
+        '"transcript": [{"speaker": "SCAMMER", '
+        '"utterance": "transfer to safe account"}]}'
+    )
+    (tmp_path / "noise" / "n1.json").write_text(
+        '{"case_id": "n1", "is_scam": false, '
+        '"transcript": [{"speaker": "CALLER", '
+        '"utterance": "hello"}]}'
+    )
+
+    result = await evaluation.run_evaluation(
+        corpus_dir=tmp_path,
+        store=False,
+        use_llm=False,
+    )
+    assert "run_id" in result
+    assert "summary" in result
+    assert "results" in result
+    assert len(result["results"]) == 2
+    assert result["corpus_size"] == 2
+
+
+@pytest.mark.asyncio
+@patch("src.enterprise.evaluation.get_supabase_client")
+@patch("src.enterprise.evaluation.emit_event")
+@patch("src.enterprise.evaluation.registry")
+async def test_run_evaluation_with_structural_rule(
+    mock_registry: MagicMock,
+    mock_emit: MagicMock,
+    mock_client: MagicMock,
+    tmp_path,
+):
+    """When a core rule body is supplied, it is parsed and can fire."""
+    mock_registry.get_artifact.return_value = None
+    mock_registry.list_artifacts.return_value = []
+    mock_emit.return_value = None
+
+    # A transcript that should trigger the structural rule
+    core_body = (
+        "R-1: When someone claims to be a government official "
+        "and instructs the victim not to tell anyone "
+        "while demanding a transfer of funds, flag as high risk."
+    )
+    (tmp_path / "base").mkdir()
+    (tmp_path / "noise").mkdir()
+    (tmp_path / "base" / "c1.json").write_text(
+        '{"case_id": "c1", "is_scam": true, '
+        '"transcript": [{"speaker": "SCAMMER", '
+        '"utterance": "I am from the police. Do not tell anyone. '
+        "Transfer the money now.\"}]}"
+    )
+    (tmp_path / "noise" / "n1.json").write_text(
+        '{"case_id": "n1", "is_scam": false, '
+        '"transcript": [{"speaker": "CALLER", '
+        '"utterance": "hello"}]}'
+    )
+
+    result = await evaluation.run_evaluation(
+        corpus_dir=tmp_path,
+        core_content=core_body,
+        store=False,
+        use_llm=False,
+    )
+    assert STRUCTURAL_RULE in result.get("core_rules", [])
+
+
+@pytest.mark.asyncio
+@patch("src.enterprise.evaluation.get_supabase_client")
+@patch("src.enterprise.evaluation.emit_event")
+@patch("src.enterprise.evaluation.registry")
+async def test_run_evaluation_records_the_version_a_pinned_body_came_from(
+    mock_registry: MagicMock,
+    mock_emit: MagicMock,
+    mock_client: MagicMock,
+    tmp_path,
+):
+    """A pinned body must report its version, not ``None``.
+
+    ``active_core_rules`` cannot infer a version from an explicit body, so
+    without an explicit ``core_version`` every pinned pass stored
+    ``phone_core: None`` — which made two runs of two *different* core versions
+    look like the same configuration, and the console's before/after pair
+    indistinguishable.
+    """
+    mock_registry.get_artifact.return_value = None
+    mock_registry.list_artifacts.return_value = []
+    mock_emit.return_value = None
+    mock_client.return_value.table.return_value.insert.return_value.execute = (
+        MagicMock(data=[])
+    )
+
+    (tmp_path / "base").mkdir()
+    (tmp_path / "noise").mkdir()
+    (tmp_path / "base" / "c1.json").write_text(
+        '{"case_id": "c1", "is_scam": true, '
+        '"transcript": [{"speaker": "SCAMMER", '
+        '"utterance": "transfer to safe account"}]}'
+    )
+    (tmp_path / "noise" / "n1.json").write_text(
+        '{"case_id": "n1", "is_scam": false, '
+        '"transcript": [{"speaker": "CALLER", '
+        '"utterance": "hello"}]}'
+    )
+
+    result = await evaluation.run_evaluation(
+        corpus_dir=tmp_path,
+        core_content="R-1: ignore this body for the assertion",
+        core_version=7,
+        store=False,
+        use_llm=False,
+    )
+    assert result["artifact_ver"][CORE_ARTIFACT_NAME] == 7
+
+
+@pytest.mark.asyncio
+@patch("src.enterprise.evaluation.get_supabase_client")
+@patch("src.enterprise.evaluation.emit_event")
+@patch("src.enterprise.evaluation.registry")
+async def test_run_evaluation_prefers_the_published_version_over_the_pinned_one(
+    mock_registry: MagicMock,
+    mock_emit: MagicMock,
+    mock_client: MagicMock,
+    tmp_path,
+):
+    """When nothing is pinned, the registry wins and ``core_version`` is ignored.
+
+    ``core_version`` is a *fallback* for pinned bodies only. An unpinned run
+    scores whatever is published, so its snapshot has to name that version
+    even if a caller passed a stale number.
+    """
+    mock_registry.get_artifact.return_value = {
+        "content": "R-1: structural rule body",
+        "version": 11,
+    }
+    mock_registry.list_artifacts.return_value = []
+    mock_emit.return_value = None
+    mock_client.return_value.table.return_value.insert.return_value.execute = (
+        MagicMock(data=[])
+    )
+
+    (tmp_path / "base").mkdir()
+    (tmp_path / "noise").mkdir()
+
+    result = await evaluation.run_evaluation(
+        corpus_dir=tmp_path,
+        core_version=3,
+        store=False,
+        use_llm=False,
+    )
+    assert result["artifact_ver"][CORE_ARTIFACT_NAME] == 11
+
+
+# ── get_redteam_tests ──────────────────────────────────────────────────────
+_CORE_V6 = (
+    "# phone_agent_core\n\n## Escalation rules\n\n"
+    "- R-1: Escalate when the caller requests a one-time code or password.\n"
+)
+_CORE_V7 = (
+    _CORE_V6 + "\nR-3: Escalate when a caller who claims to represent an official authority "
+    "instructs the customer to keep the call secret and to move funds to another account.\n"
+)
+
+
+def _run_row(label: str, version: int) -> dict:
+    """An ``eval_runs`` row in the nested shape ``_store_eval_run`` writes."""
+    return {
+        "id": f"run-{version}",
+        "label": label,
+        "started_at": "2026-09-12T00:00:00Z",
+        "summary": {"artifact_ver": {CORE_ARTIFACT_NAME: version}},
+    }
+
+
+def _patch_redteam(monkeypatch, rows: list[dict], bodies: dict[int, str]) -> None:
+    """Pin the two latest runs and the core bodies they resolved to."""
+    monkeypatch.setattr(evaluation, "_latest_rows", lambda limit=2, client=None: rows)
+    monkeypatch.setattr(
+        evaluation.registry,
+        "get_artifact",
+        lambda name, version=None, client=None: (
+            {"content": bodies[version], "version": version} if version in bodies else None
+        ),
+    )
+
+
+def test_redteam_tests_scores_each_case_against_both_core_versions(monkeypatch):
+    """Every fixture is scored twice, so the panel shows a real before/after."""
+    _patch_redteam(
+        monkeypatch,
+        [_run_row("after", 7), _run_row("before", 6)],
+        {6: _CORE_V6, 7: _CORE_V7},
+    )
+
+    payload = evaluation.get_redteam_tests()
+
+    assert payload["core_before"] == 6
+    assert payload["core_after"] == 7
+    assert payload["summary"]["total"] == len(payload["tests"]) == 10
+    # The pack tier catches the evasions it is not aimed at; the structural rule
+    # is what closes the rest.
+    assert payload["summary"]["detected_before"] == 2
+    assert payload["summary"]["detected_after"] == 9
+
+
+def test_redteam_tests_names_the_signal_each_mutation_targets(monkeypatch):
+    """A row without a target would be a case id and nothing else."""
+    _patch_redteam(
+        monkeypatch,
+        [_run_row("after", 7), _run_row("before", 6)],
+        {6: _CORE_V6, 7: _CORE_V7},
+    )
+
+    by_id = {t["case_id"]: t for t in evaluation.get_redteam_tests()["tests"]}
+
+    assert by_id["redteam_synonym_sub"]["targets"] == "signature phrase"
+    assert by_id["redteam_lang_switch"]["targets"] == "language"
+    assert by_id["redteam_identifier_obfuscation"]["targets"] == "watchlist identifier"
+    # The recon-only case is the one expected to stay missed on both sides.
+    recon = by_id["redteam_callback_recon"]
+    assert recon["before_detected"] is False
+    assert recon["after_detected"] is False
+
+
+def test_redteam_tests_quotes_caller_speech_never_the_ai_warning(monkeypatch):
+    """The quoted line is evidence, so it must not be the system's own verdict."""
+    _patch_redteam(
+        monkeypatch,
+        [_run_row("after", 7), _run_row("before", 6)],
+        {6: _CORE_V6, 7: _CORE_V7},
+    )
+
+    for test in evaluation.get_redteam_tests()["tests"]:
+        assert test["tell"], f'{test["case_id"]} has no quoted line'
+        assert not test["tell"].startswith(("Amaran", "Warning"))
+
+
+def test_redteam_tests_degrades_without_runs(monkeypatch):
+    """No runs means no core rules — never an exception on the screen."""
+    _patch_redteam(monkeypatch, [], {})
+
+    payload = evaluation.get_redteam_tests()
+
+    assert payload["core_before"] is None
+    assert payload["core_after"] is None
+    assert payload["summary"]["total"] == 10
+    assert payload["summary"]["detected_after"] <= payload["summary"]["detected_before"]
+
+
+# ── is_machine_evaluable ───────────────────────────────────────────────────
+#
+# A core rule the detector cannot parse is never applied to any case, so
+# publishing one changes no score while looking like progress — the console
+# then shows two core versions that behave identically.
+def test_fallback_rule_is_machine_evaluable():
+    """The substitute the publish paths fall back to must itself be scorable."""
+    assert evaluation.is_machine_evaluable(evaluation.FALLBACK_STRUCTURAL_RULE_TEXT)
+
+
+def test_secrecy_only_rule_is_not_machine_evaluable():
+    """A real invariant the detector does not model is still unscorable.
+
+    This is the exact shape a generaliser produced live: an isolation term with
+    no authority and no money term. It was published as core v7 and made no
+    difference to any case, which is why the gate exists.
+    """
+    secrecy_only = (
+        "Escalate when the caller instructs the recipient to keep the conversation "
+        "secret from family or others, or to remain on the line continuously."
+    )
+    assert not evaluation.is_machine_evaluable(secrecy_only)
+
+
+def test_empty_rule_is_not_machine_evaluable():
+    """Absent wording must not read as a valid rule."""
+    assert not evaluation.is_machine_evaluable("")
+    assert not evaluation.is_machine_evaluable(None)

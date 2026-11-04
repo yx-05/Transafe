@@ -246,7 +246,7 @@ export const ScanPage: React.FC = () => {
                 {sourceType === 'IMAGE' && (
                   <div style={{ marginBottom: '24px' }}>
                     <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--on-surface)', display: 'block', marginBottom: '8px' }}>
-                      Upload Screenshot Image (Groq Vision OCR)
+                      Upload Screenshot Image (DeepSeek Vision OCR)
                     </label>
                     {/* Drop Zone */}
                     <div
