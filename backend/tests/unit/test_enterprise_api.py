@@ -487,3 +487,117 @@ def test_overview_degrades_to_zeroes_without_the_v2_migration() -> None:
     assert layers["case"]["open"] == 0
     assert layers["discovery"]["unrecognised"] == 0
     assert layers["registry"]["core_version"] == 0
+
+
+# ── approval: the core patch must be one the detector can score ────────────
+#
+# Observed live: approving a campaign published core v7 carrying a secrecy-only
+# rule. The detector's parser needs an authority term AND an isolation term AND
+# a money term, so v7 was never applied to any case — v6 and v7 behaved
+# identically and the evaluation showed no change. Only RUN ADAPTATION, whose
+# deterministic fallback wording *is* scorable, produced a visible jump.
+#
+# The adaptation loop already refused to publish an unscorable rule. The
+# approval path did not, which is the asymmetry this test pins down.
+
+_CORE_BODY_V6 = (
+    "# phone_agent_core\n\n## Escalation rules\n\n"
+    "- R-1: Escalate when the caller requests a one-time code or password.\n"
+)
+
+#: A legitimate invariant the parser does not model: isolation, and nothing else.
+_UNSCORABLE_RULE = {
+    "found": True,
+    "rule_id": "R-2",
+    "rule_text": (
+        "Escalate when the caller instructs the recipient to keep the conversation "
+        "secret from family or others, or to remain on the line continuously."
+    ),
+    "source_campaigns": ["SCAM-027"],
+    "justification": "secrecy invariant observed across three campaigns",
+}
+
+
+def test_approval_substitutes_a_rule_the_detector_cannot_score() -> None:
+    """An unscorable proposal is replaced, not published as an inert artifact."""
+    import asyncio
+
+    from src.api.enterprise.router import _maybe_publish_core_patch
+    from src.enterprise.evaluation import (
+        STRUCTURAL_RULE,
+        is_machine_evaluable,
+        parse_core_rules,
+    )
+
+    # Guard the premise: if this wording ever becomes scorable the test would
+    # pass for the wrong reason.
+    assert not is_machine_evaluable(_UNSCORABLE_RULE["rule_text"])
+
+    captured: dict[str, object] = {}
+
+    async def fake_publish(new_content, proposal, approved_by="system"):
+        captured["content"] = new_content
+        captured["proposal"] = proposal
+        return {"name": "phone_agent_core", "version": 7}, []
+
+    with (
+        patch(
+            "src.enterprise.compiler.fetch_approved_campaigns_with_mo",
+            return_value=[{"code": "SCAM-027"}],
+        ),
+        patch("src.enterprise.registry.get_artifact", return_value={"content": _CORE_BODY_V6}),
+        patch(
+            "src.enterprise.generaliser.maybe_generalise",
+            return_value=dict(_UNSCORABLE_RULE),
+        ),
+        patch("src.enterprise.propagation.publish_and_propagate_core", new=fake_publish),
+        patch("src.api.enterprise.router.emit_event", new_callable=AsyncMock),
+    ):
+        asyncio.run(_maybe_publish_core_patch("fraud_ops"))
+
+    proposal = captured["proposal"]
+    assert isinstance(proposal, dict)
+    assert proposal["rule_id"] == "R-2"
+    # The wording the generaliser chose is kept for the audit trail...
+    assert proposal["substituted_from"] == _UNSCORABLE_RULE["rule_text"]
+    # ...but the body that was actually published is one the detector scores.
+    assert STRUCTURAL_RULE in parse_core_rules(str(captured["content"]))
+    assert is_machine_evaluable(str(proposal["rule_text"]))
+
+
+def test_approval_publishes_a_scorable_proposal_unchanged() -> None:
+    """A proposal the detector can score is published as-is, with no substitution."""
+    import asyncio
+
+    from src.api.enterprise.router import _maybe_publish_core_patch
+    from src.enterprise.evaluation import FALLBACK_STRUCTURAL_RULE_TEXT
+
+    scorable = {
+        "found": True,
+        "rule_id": "R-2",
+        "rule_text": FALLBACK_STRUCTURAL_RULE_TEXT,
+        "source_campaigns": ["SCAM-019", "SCAM-024", "SCAM-027"],
+        "justification": "authority + isolation + money movement co-occur",
+    }
+    captured: dict[str, object] = {}
+
+    async def fake_publish(new_content, proposal, approved_by="system"):
+        captured["proposal"] = proposal
+        return {"name": "phone_agent_core", "version": 7}, []
+
+    with (
+        patch(
+            "src.enterprise.compiler.fetch_approved_campaigns_with_mo",
+            return_value=[{"code": "SCAM-027"}],
+        ),
+        patch("src.enterprise.registry.get_artifact", return_value={"content": _CORE_BODY_V6}),
+        patch("src.enterprise.generaliser.maybe_generalise", return_value=dict(scorable)),
+        patch("src.enterprise.propagation.publish_and_propagate_core", new=fake_publish),
+        patch("src.api.enterprise.router.emit_event", new_callable=AsyncMock),
+    ):
+        asyncio.run(_maybe_publish_core_patch("fraud_ops"))
+
+    proposal = captured["proposal"]
+    assert isinstance(proposal, dict)
+    assert "substituted_from" not in proposal
+    assert proposal["rule_text"] == scorable["rule_text"]

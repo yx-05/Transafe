@@ -11,7 +11,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -1754,6 +1754,10 @@ async def _maybe_publish_core_patch(approved_by: str) -> None:
     changes only when a genuinely campaign-agnostic invariant is found.
     """
     from src.enterprise.compiler import fetch_approved_campaigns_with_mo
+    from src.enterprise.evaluation import (
+        FALLBACK_STRUCTURAL_RULE_TEXT,
+        is_machine_evaluable,
+    )
     from src.enterprise.generaliser import build_core_patch, maybe_generalise
     from src.enterprise.propagation import publish_and_propagate_core
 
@@ -1773,15 +1777,39 @@ async def _maybe_publish_core_patch(approved_by: str) -> None:
         )
         return
 
+    # A rule the detector cannot parse is never applied to any case, so
+    # publishing it changes no score while looking like progress — and the
+    # console then renders two core versions that behave identically, which
+    # reads as the adaptation having failed. The generaliser sometimes proposes
+    # a legitimate invariant the parser does not model (a secrecy-only rule,
+    # for instance), so substitute the deterministic structural rule and record
+    # the substitution rather than shipping an inert artifact.
+    original_text = str(proposal.get("rule_text") or "")
+    substituted = not is_machine_evaluable(original_text)
+    if substituted:
+        proposal = {
+            **proposal,
+            "rule_text": FALLBACK_STRUCTURAL_RULE_TEXT,
+            "substituted_from": original_text,
+            "justification": (
+                "The proposed wording was not machine-evaluable, so the deterministic "
+                "structural rule was published in its place. "
+                f"Original proposal: {original_text}"
+            ),
+        }
+
     await emit_event(
         layer="compiler",
         event_type="core_patch_proposed",
         payload={
             "rule_id": proposal.get("rule_id"),
             "rule_text": proposal.get("rule_text"),
+            "substituted": substituted,
+            "substituted_from": original_text if substituted else None,
             "source_campaigns": proposal.get("source_campaigns", []),
             "justification": proposal.get("justification"),
         },
+        severity="warning" if substituted else "info",
     )
 
     new_content = build_core_patch(current_content, proposal)
@@ -1811,10 +1839,19 @@ async def _maybe_publish_core_patch(approved_by: str) -> None:
 
 
 # ── Evaluation harness (Screen F) ────────────────────────────────────────────
-#: Run id stamped on events emitted while the console is in live mode. Mirrors
-#: ``enterprise_demo.REPLAY_RUN_ID`` so a consumer of ``ns_events`` can always
-#: tell a scripted frame from a live one.
-LIVE_RUN_ID = "demo-live"
+#: Run id stamped on events emitted while the console is in live mode.
+#:
+#: This must be a UUID for exactly the reason ``REPLAY_RUN_LABEL`` documents in
+#: :mod:`src.api.enterprise_demo`: ``ns_events.run_id`` is a UUID column, so
+#: emitting the literal string "demo-live" fails the INSERT with 22P02 — and
+#: because the persist failure is swallowed, the event still broadcasts live
+#: while never being stored. That is how the replay version of this bug survived
+#: a whole debug cycle: everything looked healthy and nothing was in the backlog.
+#: The label stays separate so a reader can still tell live frames from scripted.
+LIVE_RUN_LABEL = "demo-live"
+
+#: Stable UUID for the live run, derived the same way as the seed ids.
+LIVE_RUN_ID = str(uuid5(NAMESPACE_URL, f"https://transafe.local/v2/seed/{LIVE_RUN_LABEL}"))
 
 
 class EvalRunRequest(BaseModel):

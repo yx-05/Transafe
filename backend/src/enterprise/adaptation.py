@@ -46,11 +46,11 @@ from src.enterprise.corpus import (
 )
 from src.enterprise.evaluation import (
     CORE_ARTIFACT_NAME,
-    STRUCTURAL_RULE,
+    FALLBACK_STRUCTURAL_RULE_TEXT,
     _ground_truth_for,
     _load_corpus,
     _store_eval_run,
-    parse_core_rules,
+    is_machine_evaluable,
     run_evaluation,
 )
 from src.enterprise.events import emit_event
@@ -80,11 +80,9 @@ Baseline conversational defence for the phone agent.
 - R-2: Escalate when the caller refuses to be called back on a published number.
 """
 
-_FALLBACK_RULE_TEXT = (
-    "Escalate immediately when a caller who claims to represent an official authority "
-    "also instructs the customer to keep the call secret and to move funds to another "
-    "account, whatever wording, language or institution the caller uses."
-)
+#: Kept as a module alias so existing references and tests read the same text
+#: the detector is known to recognise.
+_FALLBACK_RULE_TEXT = FALLBACK_STRUCTURAL_RULE_TEXT
 
 
 async def run_adaptation_loop(
@@ -328,7 +326,7 @@ def _propose(
     if proposal is not None:
         # Only a rule the detector can actually evaluate can be measured. An
         # unmeasurable rule keeps confidence 0.0 and therefore a human gate.
-        if STRUCTURAL_RULE not in parse_core_rules(str(proposal.get("rule_text") or "")):
+        if not is_machine_evaluable(str(proposal.get("rule_text") or "")):
             return (
                 proposal,
                 0.0,

@@ -1,7 +1,7 @@
-"""Speech-to-Text service supporting dual engines: DashScope Paraformer (China) and Deepgram Nova-3.
+"""Speech-to-Text service supporting dual engines: Deepgram Nova-3 and DashScope Paraformer.
 
-Primary STT: Alibaba Cloud DashScope (paraformer-v2) — China-accessible.
-Fallback STT: Deepgram Nova-3 — used when DEEPGRAM_API_KEY is set and DashScope fails.
+Primary STT: Deepgram Nova-3 — high accuracy and live streaming support.
+Fallback STT: Alibaba Cloud DashScope (paraformer-v2) — used as backup when Deepgram fails.
 """
 
 import logging
@@ -166,13 +166,26 @@ async def transcribe_audio_chunk(
     audio_bytes: bytes,
     filename: str = "chunk.webm",
     language: str = "en",
-    stt_engine: str = "dashscope",
+    stt_engine: str = "deepgram",
 ) -> str:
-    """Transcribe an audio chunk using selected engine ('dashscope' or 'deepgram' / 'nova-3')."""
+    """Transcribe an audio chunk using selected engine with automatic fallback.
+
+    Default: Deepgram Nova-3 as primary, falls back to DashScope Paraformer.
+    If explicitly set to 'dashscope', tries DashScope first and falls back to Deepgram.
+    """
     if not audio_bytes:
         return ""
 
     if stt_engine.lower() in ("deepgram", "nova-3", "nova3"):
-        return await transcribe_audio_chunk_deepgram(audio_bytes, filename, language)
+        result = await transcribe_audio_chunk_deepgram(audio_bytes, filename, language)
+        if result:
+            return result
+        logger.warning("Deepgram transcription failed or returned empty; falling back to DashScope...")
+        return await transcribe_audio_chunk_dashscope(audio_bytes, filename, language)
 
-    return await transcribe_audio_chunk_dashscope(audio_bytes, filename, language)
+    # DashScope requested as primary engine; fallback to Deepgram
+    result = await transcribe_audio_chunk_dashscope(audio_bytes, filename, language)
+    if result:
+        return result
+    logger.warning("DashScope transcription failed or returned empty; falling back to Deepgram...")
+    return await transcribe_audio_chunk_deepgram(audio_bytes, filename, language)

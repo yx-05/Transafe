@@ -579,3 +579,33 @@ def test_redteam_tests_degrades_without_runs(monkeypatch):
     assert payload["core_after"] is None
     assert payload["summary"]["total"] == 10
     assert payload["summary"]["detected_after"] <= payload["summary"]["detected_before"]
+
+
+# ── is_machine_evaluable ───────────────────────────────────────────────────
+#
+# A core rule the detector cannot parse is never applied to any case, so
+# publishing one changes no score while looking like progress — the console
+# then shows two core versions that behave identically.
+def test_fallback_rule_is_machine_evaluable():
+    """The substitute the publish paths fall back to must itself be scorable."""
+    assert evaluation.is_machine_evaluable(evaluation.FALLBACK_STRUCTURAL_RULE_TEXT)
+
+
+def test_secrecy_only_rule_is_not_machine_evaluable():
+    """A real invariant the detector does not model is still unscorable.
+
+    This is the exact shape a generaliser produced live: an isolation term with
+    no authority and no money term. It was published as core v7 and made no
+    difference to any case, which is why the gate exists.
+    """
+    secrecy_only = (
+        "Escalate when the caller instructs the recipient to keep the conversation "
+        "secret from family or others, or to remain on the line continuously."
+    )
+    assert not evaluation.is_machine_evaluable(secrecy_only)
+
+
+def test_empty_rule_is_not_machine_evaluable():
+    """Absent wording must not read as a valid rule."""
+    assert not evaluation.is_machine_evaluable("")
+    assert not evaluation.is_machine_evaluable(None)

@@ -153,7 +153,7 @@ export const CallCard: React.FC<CallCardProps> = ({ config, userId, onOpenXaiRep
             setTranscripts((prev) => [...prev, { speaker: msg.speaker || 'SCAMMER', text: msg.text || '' }]);
             setStatusLog((prev) => [
               ...prev,
-              `[GROQ WHISPER STT] [${msg.speaker}]: "${msg.text}"`,
+              `[STT] [${msg.speaker}]: "${msg.text}"`,
             ]);
           }
           if (msg.type === 'highlight' && msg.highlighted_spans) {
@@ -271,7 +271,7 @@ export const CallCard: React.FC<CallCardProps> = ({ config, userId, onOpenXaiRep
             setTranscripts((prev) => [...prev, { speaker: msg.speaker || 'SCAMMER', text: msg.text || '' }]);
             setStatusLog((prev) => [
               ...prev,
-              `[GROQ WHISPER STT] [${msg.speaker}]: "${msg.text}"`,
+              `[STT] [${msg.speaker}]: "${msg.text}"`,
             ]);
           }
           if (msg.type === 'highlight' && msg.highlighted_spans) {
@@ -435,7 +435,7 @@ export const CallCard: React.FC<CallCardProps> = ({ config, userId, onOpenXaiRep
 
           <div className="call-dashboard-grid">
             <div className="transcript-box">
-              <h4>Dual-Speaker Groq Whisper STT Transcript</h4>
+              <h4>Dual-Speaker DashScope Paraformer STT Transcript</h4>
               <div className="transcript-lines">
                 {transcripts.length === 0 ? (
                   <p className="placeholder-text">Speak into your microphone... Audio chunks from Scammer & Customer are transcribed live.</p>

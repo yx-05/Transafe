@@ -1121,10 +1121,51 @@ button {
 
 .eval-charts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  /*
+   * Exactly three tracks, so the three charts divide the full width between
+   * them.
+   *
+   * `auto-fit` is the obvious choice and it is wrong here: the corpus table
+   * below spans `1 / -1`, which keeps every track alive, so auto-fit leaves its
+   * unused tracks in place. At 1440px that produced five 276px tracks — the
+   * charts covered ~58% of the row with 552px of dead space to their right,
+   * while the corpus table spanned the whole width and made the mismatch
+   * obvious.
+   */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /*
+   * The charts keep the full height they had before the corpus panel existed:
+   * the first row is 100% of this grid, so the three chart panels are exactly
+   * the size they were when they were its only children. The corpus table is a
+   * second row below them, reached by scrolling.
+   *
+   * Sizing the first row as `1fr` instead would divide the available height
+   * between the two rows, shrinking the charts to make room — the regression
+   * this rule exists to prevent.
+   */
+  grid-template-rows: 100% auto;
   gap: 10px;
   min-height: 0;
   overflow-y: auto;
+}
+
+/* Narrower than three readable charts: wrap instead of shrinking them. */
+@media (max-width: 1000px) {
+  .eval-charts {
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  }
+  /*
+   * The base rule sizes row 1 as `100%` because three charts sit across it.
+   * Once they wrap, the extra rows are `auto` — and an auto row has no content
+   * height to size against (the chart body is `height: 100%`), so a wrapped
+   * chart collapses to a 2px border. Give those panels a floor.
+   *
+   * The corpus table is excluded: it has its own, larger floor, and a later
+   * rule of equal specificity would otherwise shrink it.
+   */
+  .eval-charts > .panel:not(.rt-panel) {
+    min-height: 200px;
+  }
 }
 
 .eval-summary {
@@ -1135,19 +1176,13 @@ button {
 
 /* ── Red-team corpus table ────────────────────────────────────────────── */
 
-/*
- * Every panel in this grid needs an explicit height floor. `.eval-charts` sits
- * in a height-constrained row, so its auto rows size to zero once a fourth
- * panel competes for the space — the charts then render as bare borders with
- * no bars. The floor keeps all four panels visible; the grid scrolls instead.
- */
-.eval-charts > .panel {
-  min-height: 260px;
-}
-
-/* The corpus table is the taller panel, so it spans the full width and gets a
-   floor of its own. Declared after the rule above so it wins at equal
-   specificity. */
+/* The corpus table is the second row of the charts grid; see `.eval-charts`.
+   No height floor is applied to the chart panels — a floor was what made them
+   a different size from the pre-corpus layout. */
+/* The corpus table spans the full width and gets its own row height. It is the
+   only panel in this grid with a floor: the charts must keep the exact height
+   the row gives them, or they stop matching the layout they had before this
+   panel existed. */
 .eval-charts > .rt-panel {
   grid-column: 1 / -1;
   min-height: 420px;

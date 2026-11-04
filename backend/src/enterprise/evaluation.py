@@ -209,6 +209,41 @@ def active_core_rules(
     return parse_core_rules(str(artifact.get("content") or "")), artifact.get("version")
 
 
+#: The deterministic structural rule, published when a generaliser's own wording
+#: is not machine-evaluable.
+#:
+#: It lives here, beside the parser that judges it, so the two cannot drift:
+#: this is the text the detector is known to recognise. ``_CORE_AUTHORITY_TERMS``,
+#: ``_CORE_ISOLATION_TERMS`` and ``_CORE_MONEY_TERMS`` above are the vocabulary a
+#: rule must use to be scored at all.
+FALLBACK_STRUCTURAL_RULE_TEXT = (
+    "Escalate immediately when a caller who claims to represent an official authority "
+    "also instructs the customer to keep the call secret and to move funds to another "
+    "account, whatever wording, language or institution the caller uses."
+)
+
+
+def is_machine_evaluable(rule_text: str | None) -> bool:
+    """Return ``True`` when the detector can actually score this rule.
+
+    A core rule the parser does not recognise is never applied to any case, so
+    publishing it changes no score while looking like progress — and the console
+    then renders two core versions that behave identically, which reads as the
+    adaptation having failed. Every publish path must check this first.
+
+    The check is deliberately the parser itself rather than a separate
+    heuristic: anything less would be a second opinion about what the detector
+    recognises, and the two would eventually disagree.
+
+    Args:
+        rule_text: The proposed rule body.
+
+    Returns:
+        ``True`` when :func:`parse_core_rules` recognises a structural rule.
+    """
+    return STRUCTURAL_RULE in parse_core_rules(rule_text or "")
+
+
 # ── Detection ────────────────────────────────────────────────────────────────
 def _noisy_or(weights: list[float]) -> float:
     """Fuse independent signal weights with a noisy-OR, as linkage does."""

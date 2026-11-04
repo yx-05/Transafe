@@ -203,7 +203,7 @@ export const mockCaseDetail = (id: string): CaseDetail => ({
   ],
   trace: [
     { name: "orchestrator", duration_ms: 12, detail: null },
-    { name: "phone_worker", duration_ms: 840, detail: "groq 612 tok" },
+    { name: "phone_worker", duration_ms: 840, detail: "deepseek 612 tok" },
     { name: "research", duration_ms: 610, detail: "tavily 3 hits" },
     { name: "scorer", duration_ms: 4, detail: null },
     { name: "xai_explainer", duration_ms: 430, detail: null },

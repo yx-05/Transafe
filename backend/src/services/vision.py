@@ -14,14 +14,17 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from src.agents.llm import extract_json_object
-
 logger = logging.getLogger(__name__)
 
 
 def _get_deepseek_client() -> OpenAI:
     """Build the DeepSeek client lazily so the API key is read AFTER dotenv loads."""
-    load_dotenv()
+    from pathlib import Path
+    backend_env = Path(__file__).resolve().parents[2] / ".env"
+    if backend_env.exists():
+        load_dotenv(backend_env)
+    else:
+        load_dotenv()
     return OpenAI(
         api_key=os.getenv("DEEPSEEK_API_KEY") or "sk-dummy",
         base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
@@ -107,6 +110,7 @@ def analyze_image(base64_image: str) -> dict[str, str]:
         if not content:
             continue
 
+        from src.agents.llm import extract_json_object
         parsed = extract_json_object(content)
         if isinstance(parsed, dict):
             return {

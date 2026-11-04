@@ -896,7 +896,7 @@ async def ws_call_audio_stream(
 
     # STT engine mode: deepgram -> live streaming; groq -> buffered batch
     call_data = session_store.get_call(call_session_id)
-    stt_engine = (call_data or {}).get("stt_engine", "dashscope")
+    stt_engine = (call_data or {}).get("stt_engine", "deepgram")
     dg_session: DeepgramStreamingSession | None = None
     dg_task: asyncio.Task | None = None
     if str(stt_engine).lower() in ("deepgram", "nova-3", "nova3"):
@@ -1034,7 +1034,7 @@ async def process_stt_transcription(call_session_id: str, speaker_role: str, aud
         if not call_data or call_data.get("status") == "ENDED":
             return
 
-        stt_engine = call_data.get("stt_engine", "dashscope") if call_data else "dashscope"
+        stt_engine = call_data.get("stt_engine", "deepgram") if call_data else "deepgram"
         text = await transcribe_audio_chunk(
             audio_bytes, filename="chunk.webm", language="en", stt_engine=stt_engine
         )

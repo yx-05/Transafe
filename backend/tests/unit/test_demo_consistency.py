@@ -18,6 +18,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from src.api.enterprise.router import LIVE_RUN_ID, LIVE_RUN_LABEL
 from src.api.enterprise_demo import REPLAY_RUN_ID, REPLAY_RUN_LABEL
 from src.enterprise.discovery import CAMPAIGN_CODE_FLOOR, _next_campaign_code
 
@@ -26,6 +27,31 @@ def test_replay_run_id_is_a_uuid() -> None:
     """The replay run id must be storable in a UUID column."""
     parsed = uuid.UUID(REPLAY_RUN_ID)  # raises if it is a label
     assert str(parsed) == REPLAY_RUN_ID
+
+
+def test_live_run_id_is_a_uuid() -> None:
+    """The live run id must be storable too.
+
+    This is the same defect the replay test above guards, missed because the
+    constant lives in a different module: emitting the label "demo-live" failed
+    the ``ns_events`` INSERT with 22P02, and the swallowed persist failure meant
+    every live-mode event broadcast normally while never being stored.
+    """
+    parsed = uuid.UUID(LIVE_RUN_ID)  # raises if it is a label
+    assert str(parsed) == LIVE_RUN_ID
+    assert LIVE_RUN_ID != LIVE_RUN_LABEL
+
+
+def test_live_run_id_is_stable_and_labelled() -> None:
+    """Derived from the label, so it is reproducible and still traceable."""
+    assert str(
+        uuid.uuid5(uuid.NAMESPACE_URL, f"https://transafe.local/v2/seed/{LIVE_RUN_LABEL}")
+    ) == LIVE_RUN_ID
+
+
+def test_live_and_replay_run_ids_differ() -> None:
+    """A live frame and a scripted frame must stay distinguishable."""
+    assert LIVE_RUN_ID != REPLAY_RUN_ID
 
 
 def test_replay_run_id_is_stable_and_labelled() -> None:

@@ -34,7 +34,7 @@ export const SttTuningCard: React.FC<SttTuningCardProps> = ({
   });
   const [logs, setLogs] = useState<string[]>([
     'Standalone STT Engine Tuning Lab Initialized.',
-    'Dual STT Engine Support: Groq Whisper & Deepgram Nova-3 active.',
+    'Dual STT Engine Support: DashScope Paraformer & Deepgram Nova-3 active.',
   ]);
 
   const audioStreamerRef = useRef<CallAudioStreamer>(new CallAudioStreamer());
@@ -265,9 +265,9 @@ export const SttTuningCard: React.FC<SttTuningCardProps> = ({
       <div className="card-header">
         <div className="card-title">
           <Sliders className="card-icon text-red" size={20} />
-          <h3>🎙️ Standalone Groq STT Engine Tuning Lab</h3>
+          <h3>🎙️ Standalone DashScope STT Engine Tuning Lab</h3>
         </div>
-        <span className="card-tag red">ASYNC GROQ + SILENCE VAD</span>
+        <span className="card-tag red">ASYNC DASHSCOPE PARA + SILENCE VAD</span>
       </div>
 
       {/* STT ENGINE SELECTOR TOGGLE */}
@@ -304,7 +304,7 @@ export const SttTuningCard: React.FC<SttTuningCardProps> = ({
             transition: 'all 0.2s ease',
           }}
         >
-          🎙️ Groq Whisper (Batch)
+          🎙️ DashScope Paraformer (Batch)
         </button>
       </div>
 
@@ -312,7 +312,7 @@ export const SttTuningCard: React.FC<SttTuningCardProps> = ({
       <div className="stt-tuning-params" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: '1rem' }}>
         <div className="param-badge" style={{ background: 'rgba(15, 23, 42, 0.7)', border: '1px solid rgba(255,255,255,0.1)', padding: '0.6rem', borderRadius: '8px', fontSize: '0.8rem' }}>
           <strong style={{ color: '#38bdf8', display: 'block' }}>Active STT Engine:</strong>
-          <span>{sttEngine === 'nova-3' ? 'Deepgram Nova-3' : 'Groq Whisper'}</span>
+          <span>{sttEngine === 'nova-3' ? 'Deepgram Nova-3' : 'DashScope Paraformer'}</span>
         </div>
         <div className="param-badge" style={{ background: 'rgba(15, 23, 42, 0.7)', border: '1px solid rgba(255,255,255,0.1)', padding: '0.6rem', borderRadius: '8px', fontSize: '0.8rem' }}>
           <strong style={{ color: '#4ade80', display: 'block' }}>Smart Format:</strong>
@@ -327,7 +327,7 @@ export const SttTuningCard: React.FC<SttTuningCardProps> = ({
       {/* START / STOP CONTROLS */}
       {!isStreaming ? (
         <button className="btn-primary" onClick={startTuningSession} style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)', width: '100%' }}>
-          <Mic size={18} /> Start Standalone Groq STT Test Session
+          <Mic size={18} /> Start Standalone DashScope STT Test Session
         </button>
       ) : (
         <div className="active-call-panel red-border">
@@ -363,7 +363,7 @@ export const SttTuningCard: React.FC<SttTuningCardProps> = ({
           {sttState === 'transcribing' && (
             <div className="stt-transcribing-indicator" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.4)', borderRadius: '8px', padding: '0.5rem 0.75rem', color: '#fca5a5', fontSize: '0.85rem' }}>
               <Loader2 className="spin" size={16} />
-              <span>{sttEngine === 'nova-3' ? 'Deepgram Nova-3 streaming... live interim results' : 'AsyncGroq Whisper in-flight... Transcribing utterance non-blockingly'}</span>
+              <span>{sttEngine === 'nova-3' ? 'Deepgram Nova-3 streaming... live interim results' : 'Async DashScope Paraformer in-flight... Transcribing utterance non-blockingly'}</span>
             </div>
           )}
 

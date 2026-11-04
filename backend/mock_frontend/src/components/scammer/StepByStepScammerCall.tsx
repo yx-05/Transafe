@@ -35,7 +35,7 @@ export const StepByStepScammerCall: React.FC<StepByStepScammerCallProps> = ({
   // Counters & Logs
   const [stepLogs, setStepLogs] = useState<string[]>([
     'Combined Step-by-Step Call + STT Tuning Terminal Ready.',
-    'Dual STT Engine Support: Deepgram Nova-3 (streaming) & Groq Whisper (batch).',
+    'Dual STT Engine Support: Deepgram Nova-3 (streaming) & DashScope Paraformer (batch).',
   ]);
 
   const audioStreamerRef = useRef<CallAudioStreamer>(new CallAudioStreamer());
@@ -110,7 +110,7 @@ export const StepByStepScammerCall: React.FC<StepByStepScammerCallProps> = ({
 
   const handleSelectEngine = async (engine: 'nova-3' | 'groq') => {
     setSttEngine(engine);
-    addLog(`Switched STT Engine to: ${engine === 'nova-3' ? 'Deepgram Nova-3' : 'Groq Whisper'}`);
+    addLog(`Switched STT Engine to: ${engine === 'nova-3' ? 'Deepgram Nova-3' : 'DashScope Paraformer'}`);
     if (callSessionId) {
       try {
         const client = new TranSafeApiClient(config);
@@ -341,7 +341,7 @@ export const StepByStepScammerCall: React.FC<StepByStepScammerCallProps> = ({
             transition: 'all 0.2s ease',
           }}
         >
-          🎙️ Groq Whisper (Batch)
+          🎙️ DashScope Paraformer (Batch)
         </button>
       </div>
 
@@ -349,7 +349,7 @@ export const StepByStepScammerCall: React.FC<StepByStepScammerCallProps> = ({
       <div className="stt-tuning-params" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: '1rem' }}>
         <div className="param-badge" style={{ background: 'rgba(15, 23, 42, 0.7)', border: '1px solid rgba(255,255,255,0.1)', padding: '0.6rem', borderRadius: '8px', fontSize: '0.8rem' }}>
           <strong style={{ color: '#38bdf8', display: 'block' }}>Active STT Engine:</strong>
-          <span>{sttEngine === 'nova-3' ? 'Deepgram Nova-3' : 'Groq Whisper'}</span>
+          <span>{sttEngine === 'nova-3' ? 'Deepgram Nova-3' : 'DashScope Paraformer'}</span>
         </div>
         <div className="param-badge" style={{ background: 'rgba(15, 23, 42, 0.7)', border: '1px solid rgba(255,255,255,0.1)', padding: '0.6rem', borderRadius: '8px', fontSize: '0.8rem' }}>
           <strong style={{ color: '#4ade80', display: 'block' }}>Smart Format:</strong>
@@ -489,13 +489,13 @@ export const StepByStepScammerCall: React.FC<StepByStepScammerCallProps> = ({
           {sttState === 'transcribing' && (
             <div className="stt-transcribing-indicator" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.4)', borderRadius: '8px', padding: '0.5rem 0.75rem', color: '#fca5a5', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
               <Loader2 className="spin" size={16} />
-              <span>{sttEngine === 'nova-3' ? 'Deepgram Nova-3 streaming... live interim results' : 'AsyncGroq Whisper in-flight... Transcribing utterance non-blockingly'}</span>
+              <span>{sttEngine === 'nova-3' ? 'Deepgram Nova-3 streaming... live interim results' : 'Async DashScope Paraformer in-flight... Transcribing utterance non-blockingly'}</span>
             </div>
           )}
 
           {/* LIVE STT TRANSCRIPTS (tuning results on the combined card) */}
           <div className="transcript-box" style={{ marginTop: '0.75rem' }}>
-            <h4>{sttEngine === 'nova-3' ? 'Live Deepgram Nova-3 Streaming Transcripts (Interim + Final)' : 'Live Silence-Flushed Transcripts (Groq Whisper "en")'}</h4>
+            <h4>{sttEngine === 'nova-3' ? 'Live Deepgram Nova-3 Streaming Transcripts (Interim + Final)' : 'Live Silence-Flushed Transcripts (DashScope Paraformer "en")'}</h4>
             <div className="transcript-lines" style={{ maxHeight: '180px', overflowY: 'auto' }}>
               {transcripts.length === 0 ? (
                 <p className="placeholder-text">{sttEngine === 'nova-3' ? 'Speak into microphone... Words appear live as Deepgram streams them.' : 'Speak into microphone... Utterances automatically flush after ~600ms silence pause.'}</p>

@@ -223,13 +223,6 @@ export function EvalScreen({ comparison, redteam = null, onRun, running = false,
           suffix="%"
           lowerIsBetter
         />
-        <Stat
-          label="MEAN LATENCY"
-          before={before?.mean_latency_ms ?? null}
-          after={after?.mean_latency_ms ?? null}
-          suffix="ms"
-          lowerIsBetter
-        />
         <div className="stat">
           <div className="k">ARTIFACT VERSIONS</div>
           <div className="v" style={{ fontSize: 13, lineHeight: 1.5 }}>

@@ -92,7 +92,8 @@ async def health_check() -> dict[str, Any]:
         "services": {
             "supabase": "connected",
             "supabase_pgvector": "connected",
-            "groq": "connected",
+            "deepseek": "connected",
+            "dashscope": "connected",
             "tavily": "connected",
         },
         "timestamp": datetime.now(UTC).isoformat(),

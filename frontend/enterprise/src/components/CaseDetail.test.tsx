@@ -71,6 +71,6 @@ describe("CaseDetail", () => {
   it("renders the execution trace", () => {
     renderCase();
     expect(screen.getByText("phone_worker")).toBeInTheDocument();
-    expect(screen.getByText(/840ms · groq 612 tok/)).toBeInTheDocument();
+    expect(screen.getByText(/840ms · deepseek 612 tok/)).toBeInTheDocument();
   });
 });

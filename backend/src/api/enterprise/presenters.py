@@ -10,6 +10,7 @@ derived field that silently drifts is worse than a missing one.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 from datetime import datetime
 from typing import Any
@@ -73,6 +74,20 @@ def _parse_ts(value: Any) -> datetime | None:
         return None
 
 
+def _as_dict(fingerprint: Any) -> dict[str, Any] | None:
+    """Coerce a raw MO fingerprint to a dict, parsing JSON strings defensively."""
+    if isinstance(fingerprint, dict):
+        return fingerprint
+    if isinstance(fingerprint, str):
+        try:
+            val = json.loads(fingerprint)
+            if isinstance(val, dict):
+                return val
+        except Exception:
+            return None
+    return None
+
+
 def scam_type(fingerprint: dict[str, Any] | None, trigger_type: Any) -> str:
     """Best-available scam type for a case.
 
@@ -80,9 +95,10 @@ def scam_type(fingerprint: dict[str, Any] | None, trigger_type: Any) -> str:
     whose MO has not been extracted yet fall back to v1's ``trigger_type``, so
     early-demo cases show a trigger where later ones show a behavioural label.
     """
-    if fingerprint:
+    fp = _as_dict(fingerprint)
+    if fp:
         for key in ("pretext", "impersonated_entity"):
-            value = fingerprint.get(key)
+            value = fp.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return str(trigger_type or "UNKNOWN")
@@ -132,17 +148,18 @@ def mo_fingerprint(fingerprint: dict[str, Any] | None) -> dict[str, Any] | None:
     ``time_to_money_ask_sec``→``money_ask_at`` (rendered ``mm:ss`` because the
     console types it as a string), ``languages[0]``→``language``.
     """
-    if not fingerprint:
+    fp = _as_dict(fingerprint)
+    if not fp:
         return None
-    languages = fingerprint.get("languages")
+    languages = fp.get("languages")
     language = languages[0] if isinstance(languages, list) and languages else None
-    phases = fingerprint.get("script_phases")
+    phases = fp.get("script_phases")
     return {
-        "impersonates": fingerprint.get("impersonated_entity"),
-        "pretext": fingerprint.get("pretext"),
+        "impersonates": fp.get("impersonated_entity"),
+        "pretext": fp.get("pretext"),
         "phases": [str(p) for p in phases] if isinstance(phases, list) else [],
-        "money_ask_at": format_mmss(fingerprint.get("time_to_money_ask_sec")),
-        "channel": fingerprint.get("channel"),
+        "money_ask_at": format_mmss(fp.get("time_to_money_ask_sec")),
+        "channel": fp.get("channel"),
         "language": language,
     }
 
@@ -156,9 +173,10 @@ def novel_phrases_by_line(
     lets the console highlight in place.
     """
     grouped: dict[int, list[str]] = {}
-    if not fingerprint:
+    fp = _as_dict(fingerprint)
+    if not fp:
         return grouped
-    for phrase in fingerprint.get("novel_phrases") or []:
+    for phrase in fp.get("novel_phrases") or []:
         if not isinstance(phrase, dict):
             continue
         text = phrase.get("text")

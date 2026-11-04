@@ -82,19 +82,50 @@ def test_analyze_image_uses_deepseek_model_and_json_output(mock_ds: MagicMock) -
 
 
 # -------------------------------------------------------------------
-# STT Tests (DashScope / Deepgram)
+# STT Tests (Deepgram primary / DashScope fallback)
 # -------------------------------------------------------------------
 @pytest.mark.asyncio
-@patch("src.services.stt.transcribe_audio_chunk_dashscope")
-async def test_transcribe_audio_chunk_success(mock_stt: MagicMock) -> None:
-    """Assert STT returns transcribed text string from audio bytes input."""
-    mock_stt.return_value = "Hello, this is a scam alert test audio."
+@patch("src.services.stt.transcribe_audio_chunk_deepgram")
+async def test_transcribe_audio_chunk_success(mock_deepgram: MagicMock) -> None:
+    """Assert STT returns transcribed text using Deepgram Nova-3 as primary."""
+    mock_deepgram.return_value = "Hello, this is a scam alert test audio."
 
     audio_data = b"fake_audio_bytes_12345"
     result = await transcribe_audio_chunk(audio_data, language="en")
 
     assert result == "Hello, this is a scam alert test audio."
-    mock_stt.assert_awaited_once()
+    mock_deepgram.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch("src.services.stt.transcribe_audio_chunk_dashscope")
+@patch("src.services.stt.transcribe_audio_chunk_deepgram")
+async def test_transcribe_audio_chunk_fallback_to_dashscope(
+    mock_deepgram: MagicMock, mock_dashscope: MagicMock
+) -> None:
+    """Assert STT falls back to DashScope if Deepgram returns empty/fails."""
+    mock_deepgram.return_value = ""
+    mock_dashscope.return_value = "Fallback transcript from DashScope."
+
+    audio_data = b"fake_audio_bytes_12345"
+    result = await transcribe_audio_chunk(audio_data, language="en")
+
+    assert result == "Fallback transcript from DashScope."
+    mock_deepgram.assert_awaited_once()
+    mock_dashscope.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch("src.services.stt.transcribe_audio_chunk_dashscope")
+async def test_transcribe_audio_chunk_explicit_dashscope(mock_dashscope: MagicMock) -> None:
+    """Assert explicit dashscope selection calls DashScope."""
+    mock_dashscope.return_value = "DashScope explicit transcript."
+
+    audio_data = b"fake_audio_bytes_12345"
+    result = await transcribe_audio_chunk(audio_data, language="en", stt_engine="dashscope")
+
+    assert result == "DashScope explicit transcript."
+    mock_dashscope.assert_awaited_once()
 
 
 @pytest.mark.asyncio
